@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8002:8002"
+    env_file:
+      - backend/.env
+    environment:
+      MEMPAL_HOME: /app/data/mempalace
+    volumes:
+      - freeai_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  freeai_data:

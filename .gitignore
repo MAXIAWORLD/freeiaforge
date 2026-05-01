@@ -1,0 +1,22 @@
+# Secrets
+backend/.env
+
+# Database & runtime data
+backend/data/
+counter/freeai.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.coverage
+htmlcov/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Docker
+*.log
