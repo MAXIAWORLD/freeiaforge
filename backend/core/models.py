@@ -4,8 +4,10 @@ from pydantic import BaseModel, Field
 
 
 class Message(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str | list[dict]  # str pour texte, list[dict] pour contenu multimodal
 
 
 class ChatRequest(BaseModel):
@@ -43,3 +45,6 @@ class ProviderStatus(BaseModel):
     requests_limit: int
     tokens_used: int
     tokens_limit: int
+    last_error: str | None = None
+    last_used_at: str | None = None
+    consecutive_errors: int = 0

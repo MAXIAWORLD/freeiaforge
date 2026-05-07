@@ -1,19 +1,14 @@
 from __future__ import annotations
-
-import asyncio
 import logging
-
-from fastapi import APIRouter, HTTPException
-
-from core.models import ChatRequest, ChatResponse, Message
-from services.memory import MemPalaceService
+from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import StreamingResponse
+from core.models import ChatRequest
 from services.router import ProviderRouter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _router_instance: ProviderRouter | None = None
-_memory_instance: MemPalaceService | None = None
 
 
 def set_router(r: ProviderRouter) -> None:
@@ -27,47 +22,34 @@ def get_router() -> ProviderRouter:
     return _router_instance
 
 
-def set_memory(m: MemPalaceService) -> None:
-    global _memory_instance
-    _memory_instance = m
-
-
-def get_memory() -> MemPalaceService | None:
-    return _memory_instance
-
-
-@router.post("/v1/chat/completions", response_model=ChatResponse)
-async def chat_completions(request: ChatRequest) -> ChatResponse:
+@router.post("/v1/chat/completions")
+async def chat_completions(request: ChatRequest, response: Response):
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages cannot be empty")
 
-    last_user = next(
-        (m.content for m in reversed(request.messages) if m.role == "user"),
-        None,
-    )
-
-    memory = get_memory()
-    messages = list(request.messages)
-
-    if memory is not None and last_user is not None:
-        memories = await memory.query(last_user)
-        if memories:
-            system_content = "Relevant memories:\n" + "\n".join(
-                f"- {m}" for m in memories
-            )
-            messages = [Message(role="system", content=system_content)] + messages
-
-    augmented = request.model_copy(update={"messages": messages})
+    if request.stream:
+        try:
+            provider_name, gen = await get_router().route_stream(request)
+        except RuntimeError as e:
+            if "exhausted" in str(e).lower():
+                raise HTTPException(status_code=503, detail=str(e))
+            raise HTTPException(status_code=500, detail="Internal server error")
+        return StreamingResponse(
+            gen,
+            media_type="text/event-stream",
+            headers={
+                "X-Provider": provider_name,
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     try:
-        result = await get_router().route(augmented)
+        result = await get_router().route(request)
     except RuntimeError as e:
         if "exhausted" in str(e).lower():
             raise HTTPException(status_code=503, detail=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    if memory is not None and last_user is not None:
-        assistant_content = result.response.choices[0].message.content
-        asyncio.create_task(memory.store(last_user, assistant_content))
-
+    response.headers["X-Provider"] = result.provider_name
     return result.response

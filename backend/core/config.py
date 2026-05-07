@@ -30,8 +30,23 @@ class Settings(BaseSettings):
     huggingface_daily_tokens: int = Field(default=500_000, gt=0)
     mistral_daily_requests: int = Field(default=100, gt=0)
     mistral_daily_tokens: int = Field(default=200_000, gt=0)
+    openrouter_api_key: str = ""
+    openrouter_daily_requests: int = Field(default=200, gt=0)
+    openrouter_daily_tokens: int = Field(default=500_000, gt=0)
+
+    # Ollama — local, no API key required
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.2"
+    ollama_daily_requests: int = Field(default=10_000, gt=0)
+    ollama_daily_tokens: int = Field(default=10_000_000, gt=0)
+
+    # Provider order override (comma-separated names, e.g. "groq,gemini,ollama")
+    provider_order: str = ""
 
     db_path: str = "data/freeai.db"
+
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = Field(default=3600, gt=0)
 
 
 @lru_cache

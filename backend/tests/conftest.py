@@ -10,6 +10,8 @@ TEST_LIMITS = {
     "gemini": {"requests": 1500, "tokens": 1_000_000},
     "huggingface": {"requests": 1000, "tokens": 500_000},
     "mistral": {"requests": 100, "tokens": 200_000},
+    "openrouter": {"requests": 200, "tokens": 500_000},
+    "ollama": {"requests": 10_000, "tokens": 10_000_000},
 }
 
 

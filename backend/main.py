@@ -4,10 +4,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import aiosqlite
-import httpx
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,11 +23,15 @@ from providers.gemini import GeminiProvider
 from providers.groq import GroqProvider
 from providers.huggingface import HuggingFaceProvider
 from providers.mistral import MistralProvider
+from providers.ollama import OllamaProvider
+from providers.openrouter import OpenRouterProvider
 from providers.sambanova import SambanovaProvider
+from routes.anthropic import router as anthropic_router
 from routes.chat import router as chat_router
-from routes.chat import set_memory, set_router
-from services.memory import MemPalaceService
+from routes.chat import set_router
 from routes.health import router as health_router
+from routes.mcp import router as mcp_router
+from services.cache import SemanticCache
 from services.quota import QuotaService
 from services.router import ProviderRouter
 
@@ -68,6 +70,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "requests": settings.mistral_daily_requests,
             "tokens": settings.mistral_daily_tokens,
         },
+        "openrouter": {
+            "requests": settings.openrouter_daily_requests,
+            "tokens": settings.openrouter_daily_tokens,
+        },
+        "ollama": {
+            "requests": settings.ollama_daily_requests,
+            "tokens": settings.ollama_daily_tokens,
+        },
     }
     quota = QuotaService(db=db, limits=limits)
 
@@ -78,6 +88,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "gemini": settings.gemini_api_key,
         "huggingface": settings.huggingface_api_key,
         "mistral": settings.mistral_api_key,
+        "openrouter": settings.openrouter_api_key,
+        "ollama": "local",  # sentinel — Ollama needs no auth
     }
     providers = [
         CerebrasProvider(),
@@ -86,28 +98,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         GeminiProvider(),
         HuggingFaceProvider(),
         MistralProvider(),
+        OpenRouterProvider(),
+        OllamaProvider(base_url=settings.ollama_base_url, model=settings.ollama_model),
     ]
-    set_router(ProviderRouter(providers=providers, quota=quota, api_keys=api_keys))
+    cache: SemanticCache | None = None
+    if settings.cache_enabled:
+        from pathlib import Path
 
-    memory = MemPalaceService(Path("/app/data"))
-    set_memory(memory)
+        cache = SemanticCache(data_dir=Path(settings.db_path).parent)
+        logger.info("Semantic cache enabled (TTL=%ds)", settings.cache_ttl_seconds)
 
-    _flag = Path("/app/data/.installed")
-    if not _flag.exists():
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                await client.post("https://maxiaworld.app/counter/freeai")
-            _flag.touch()
-        except Exception:
-            pass
+    provider_order = (
+        [x.strip() for x in settings.provider_order.split(",") if x.strip()]
+        if settings.provider_order
+        else None
+    )
 
-    active = sum(1 for v in api_keys.values() if v)
-    logger.info("FreeIA Gateway ready — %d/%d providers active", active, len(providers))
+    set_router(
+        ProviderRouter(
+            providers=providers,
+            quota=quota,
+            api_keys=api_keys,
+            cache=cache,
+            provider_order=provider_order,
+        )
+    )
+
+    # Ollama sentinel "local" doesn't count as an external key
+    active = sum(1 for k, v in api_keys.items() if v and k != "ollama")
+    logger.info(
+        "FreeIA Gateway ready — %d/%d cloud providers active",
+        active,
+        len(providers) - 1,
+    )
     yield
     await close_db(db)
 
 
-app = FastAPI(title="FreeIA Gateway", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FreeIA Gateway", version="0.5.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -115,4 +143,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(chat_router)
+app.include_router(anthropic_router)
 app.include_router(health_router)
+app.include_router(mcp_router)

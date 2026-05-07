@@ -2,58 +2,47 @@ from __future__ import annotations
 
 import httpx
 
-from providers.base import OpenAICompatibleProvider, ProviderError, ProviderResult
 from core.models import ChatRequest, ChatResponse
+from providers.base import OpenAICompatibleProvider, ProviderError, ProviderResult
 
-_GATEWAY_ALIASES = frozenset({"auto", "freeai-gateway"})
+_HTTP_REFERER = "https://maxiaworld.app"
+_X_TITLE = "FreeIA Gateway"
 
 
-class SambanovaProvider(OpenAICompatibleProvider):
-    name = "sambanova"
-    priority = 3
-    base_url = "https://api.sambanova.ai/v1"
-    default_model = "Meta-Llama-3.3-70B-Instruct"
+class OpenRouterProvider(OpenAICompatibleProvider):
+    """OpenRouter free-tier router — priority 7 (last-resort fallback).
 
-    SUPPORTED_MODELS: frozenset[str] = frozenset(
-        {
-            "Meta-Llama-3.3-70B-Instruct",
-            "Llama-3.1-405B-Instruct",
-            "Qwen2.5-72B-Instruct",
-        }
-    )
+    OpenRouter requires two extra headers on every request:
+      - HTTP-Referer: identifies the calling app
+      - X-Title: human-readable app name shown in OpenRouter dashboard
+    """
 
-    def _resolve_model(self, requested: str) -> str:
-        """Retourne le modèle à transmettre à l'API Sambanova.
-
-        - alias gateway (auto, freeai-gateway) → default_model
-        - modèle dans SUPPORTED_MODELS → transmis tel quel
-        - inconnu → default_model
-        """
-        if requested in _GATEWAY_ALIASES:
-            return self.default_model
-        if requested in self.SUPPORTED_MODELS:
-            return requested
-        return self.default_model
+    name = "openrouter"
+    priority = 7
+    base_url = "https://openrouter.ai/api/v1"
+    default_model = "openrouter/free"
 
     async def complete(self, request: ChatRequest, api_key: str) -> ProviderResult:
-        model = self._resolve_model(request.model)
-
         payload: dict = {
-            "model": model,
+            "model": self.default_model,
             "messages": [m.model_dump() for m in request.messages],
             "temperature": request.temperature,
         }
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
 
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": _HTTP_REFERER,
+            "X-Title": _X_TITLE,
+        }
+
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 r = await client.post(
                     f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json=payload,
                 )
                 r.raise_for_status()

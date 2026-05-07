@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 import httpx
 from core.models import ChatRequest, ChatResponse
@@ -33,6 +34,12 @@ class Provider(ABC):
 
     @abstractmethod
     async def complete(self, request: ChatRequest, api_key: str) -> ProviderResult: ...
+
+    async def stream(  # type: ignore[return]
+        self, request: ChatRequest, api_key: str
+    ) -> AsyncIterator[str]:
+        raise NotImplementedError(f"{self.name} does not support streaming")
+        yield  # pragma: no cover — makes this an async generator
 
 
 class OpenAICompatibleProvider(Provider):
@@ -92,3 +99,40 @@ class OpenAICompatibleProvider(Provider):
             provider_name=self.name,
             tokens_used=tokens_used,
         )
+
+    async def stream(  # type: ignore[override]
+        self, request: ChatRequest, api_key: str
+    ) -> AsyncIterator[str]:
+        payload: dict = {
+            "model": self.default_model,
+            "messages": [m.model_dump() for m in request.messages],
+            "temperature": request.temperature,
+            "stream": True,
+        }
+        if request.max_tokens is not None:
+            payload["max_tokens"] = request.max_tokens
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                ) as r:
+                    try:
+                        r.raise_for_status()
+                    except httpx.HTTPStatusError as e:
+                        raise ProviderError(
+                            self.name, status_code=e.response.status_code
+                        ) from e
+                    async for line in r.aiter_lines():
+                        if line:
+                            yield line + "\n\n"
+        except httpx.RequestError as e:
+            raise ProviderError(
+                self.name, reason=f"network error: {type(e).__name__}"
+            ) from e
