@@ -20,7 +20,25 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     name = "openrouter"
     priority = 7
     base_url = "https://openrouter.ai/api/v1"
-    default_model = "openrouter/free"
+    default_model = "meta-llama/llama-3.3-70b-instruct:free"
+
+    def _select_best_model(self, models: list[str]) -> str:
+        free_models = [m for m in models if isinstance(m, str) and m.endswith(":free")]
+        if not free_models:
+            return self.default_model if self.default_model in models else (
+                models[0] if models else self.default_model
+            )
+        if self.default_model in free_models:
+            return self.default_model
+        # Prefer larger Llama / Qwen / DeepSeek models on free tier
+        size_tokens = ("405b", "120b", "72b", "70b", "32b")
+        family_tokens = ("llama", "qwen", "deepseek")
+        for size in size_tokens:
+            for m in free_models:
+                lower = m.lower()
+                if size in lower and any(f in lower for f in family_tokens):
+                    return m
+        return free_models[0]
 
     async def complete(self, request: ChatRequest, api_key: str) -> ProviderResult:
         payload: dict = {

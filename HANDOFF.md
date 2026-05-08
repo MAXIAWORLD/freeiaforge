@@ -1,125 +1,100 @@
 # HANDOFF — FreeIA Gateway
 
-**Date :** 2026-05-07
-**État :** v0.3.0 livré — 111 tests, commit à faire
+**Date :** 2026-05-08
+**État :** v0.5.0 + 5 fixes UX/install (post-test utilisateur réel)
 
 ---
 
-## Ce qui est fait (v0.3.0)
+## Session 2026-05-08 — fixes installation après test sur PC vierge
 
-### Nouvelles features v0.3.0
+Test réel par un utilisateur non-tech sur un Windows clean → 5 bugs trouvés et corrigés.
 
-**entrypoint.sh (auto-copie .env)**
-- `backend/entrypoint.sh` : `[ -f /app/.env ] || cp /app/.env.example /app/.env` puis `exec "$@"`
-- `Dockerfile` : `ENTRYPOINT ["sh", "entrypoint.sh"]` + `CMD [...]` conservé
-- `docker-compose.yml` : `extra_hosts: host.docker.internal:host-gateway` (Linux compat)
-- Résultat : `cp backend/.env.example backend/.env` n'est plus requis — auto au premier `docker compose up`
+### Fixes livrés (5 commits, tous pushed master)
 
-**Ollama provider (priority 9, zero-key)**
-- `providers/ollama.py` : `OllamaProvider(base_url, model)` — instance attrs pour base_url/model dynamiques
-- Sentinel `api_keys["ollama"] = "local"` → router ne le skipe jamais
-- `OLLAMA_BASE_URL=http://host.docker.internal:11434` (défaut dans .env.example pour Docker)
-- `OLLAMA_MODEL=llama3.2` configurable
-- Config : `ollama_base_url`, `ollama_model`, `ollama_daily_requests`, `ollama_daily_tokens`
-- ConnectError levée immédiatement (pas de timeout) si Ollama non démarré → fallback transparent
+| Commit | Fix |
+|---|---|
+| `7a1d7a6` | `start.ps1` + `start.sh` : auto-création de `backend/.env`. `docker-compose.yml` : `env_file required: false` (compose v2) |
+| `50f81c5` | `start.bat` ajouté — natif Windows, contourne ExecutionPolicy PowerShell |
+| `9e19bb8` | `.gitattributes` force LF sur `*.sh` + `Dockerfile`: `sed -i 's/\r$//' entrypoint.sh`. Fix le `entrypoint.sh: 2: set: Illegal option -` qui empêchait le conteneur de démarrer sur Windows |
+| `cea22fd` | Endpoint `GET /v1/models` ajouté (était 404, cause du "Premature close" dans AnythingLLM/LibreChat) |
+| `5594950` | `/v1/models` dynamique : retourne le `default_model` de chaque provider configuré (clé API présente) + alias `freeai-gateway` |
 
-**PROVIDER_ORDER (ordre custom)**
-- `PROVIDER_ORDER=groq,gemini,ollama` dans `.env` → override l'ordre par défaut
-- `ProviderRouter.__init__(provider_order: list[str] | None)` + `_apply_order()` statique
-- Logique : providers listés en premier (dans l'ordre), reste appendé par priorité
-- Noms inconnus silencieusement ignorés
-- `main.py` : parse `settings.provider_order` → liste → passe à ProviderRouter
+### Landing publique (maxia-hub)
 
-**Mise à jour _KNOWN_PROVIDERS** : "ollama" ajouté → model hint `model="ollama"` fonctionne
+- Encadré **Pré-requis** avec liens download Docker Desktop + Git
+- **Bouton "Télécharger le ZIP"** ajouté dans étape 1 (Git devient optionnel)
+- Étape 3 : `start.bat` (double-clic) au lieu de `docker compose up --build`
+- Section **Troubleshooting accordéon** : 5 erreurs courantes + solutions
+- 8 langues à jour (en/fr/es/de/ja/zh/pt/ko)
+- Déployé `https://maxiaworld.app/freeai.html`, backups VPS créés
 
----
+### Bug identifié (pas encore résolu)
 
-## Ce qui était fait (v0.2.0)
+**Cause "Premature close" dans AnythingLLM = modèles hardcodés obsolètes côté provider.**
 
-### Backend v0.2.0 (freeiaforge/backend/)
+Diagnostic confirmé par le user : les `default_model` codés en dur dans `providers/*.py` ne sont plus valides côté provider → l'API retourne une erreur → le stream est coupé → AnythingLLM voit "Premature close".
 
-**7 providers (vs 6 en v0.1.0)**
-- Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → **OpenRouter** (priority=7)
-- OpenRouter : `openrouter/free` = auto-router parmi 33 modèles gratuits
-- Headers custom OpenRouter : `HTTP-Referer: https://maxiaworld.app`, `X-Title: FreeIA Gateway`
+Modèles suspects à auditer :
+- `cerebras.py` : `llama-3.3-70b`
+- `gemini.py` : `gemini-1.5-flash` (probablement déprécié → `gemini-2.0-flash` ou `2.5-flash`)
+- `openrouter.py` : `openrouter/free` (pas un model id valide)
+- `huggingface.py` : `meta-llama/Llama-3.1-70B-Instruct` (peut être gated)
+- `mistral.py` : `mistral-large-latest`
+- `groq.py` : `llama-3.3-70b-versatile`
 
-**Sambanova : 3 modèles disponibles via model hint**
-- `Meta-Llama-3.3-70B-Instruct` (défaut)
-- `Llama-3.1-405B-Instruct`
-- `Qwen2.5-72B-Instruct`
-- Sélection via `request.model` (model hint explicite)
+### Priorité #1 prochaine session — auto-discovery des modèles
 
-**Signal routing (services/router.py)**
-- Règle 1 : contexte >24k chars → skip Cerebras (cap 8192 tokens)
-- Règle 2 : message avec image → Gemini uniquement (multimodal)
-- Règle 3 : model hint provider connu → provider unique, 503 si indisponible
-- `Message.content` supporte désormais `str | list[dict]` pour multimodal
+Plus de hardcode. Au boot de chaque provider, appeler son endpoint de listing pour récupérer la liste réelle, choisir le meilleur dispo, le stocker comme `default_model`. Refresh toutes les 24h.
 
-**ProviderStatus enrichi (GET /v1/providers + alias /v1/providers/status)**
-- Champs ajoutés : `last_error`, `last_used_at`, `consecutive_errors`
-- Tracking in-memory sur ProviderRouter (reset au restart)
+| Provider | Endpoint listing |
+|---|---|
+| Cerebras | `GET https://api.cerebras.ai/v1/models` |
+| Groq | `GET https://api.groq.com/openai/v1/models` |
+| Sambanova | `GET https://api.sambanova.ai/v1/models` |
+| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` |
+| Mistral | `GET https://api.mistral.ai/v1/models` |
+| OpenRouter | `GET https://openrouter.ai/api/v1/models` |
+| HuggingFace | API listing (specifique) |
 
-**Semantic cache SQLite (services/cache.py)**
-- Hash SHA-256 sur messages normalisés (lowercase + collapse whitespace)
-- TTL configurable via `CACHE_TTL_SECONDS` (défaut 3600s)
-- Activé/désactivé via `CACHE_ENABLED` (défaut True)
-- Store fire-and-forget via `asyncio.create_task()`
+Plan suggéré :
+1. Ajouter méthode `Provider.discover_models(api_key) -> list[str]` (interface).
+2. Implémenter `OpenAICompatibleProvider.discover_models()` (générique pour Cerebras/Groq/Sambanova/Mistral/OpenRouter — appellent tous `/v1/models`).
+3. Implémentations spécifiques pour Gemini + HuggingFace.
+4. Au startup de `ProviderRouter`, appeler `discover_models()` en parallèle (asyncio.gather), choisir le "meilleur" modèle (heuristique: plus gros / le plus récent), assigner à `default_model`.
+5. Cron 24h via asyncio task pour rafraîchir.
+6. Fallback : si discovery fail, garder le hardcode actuel.
+7. Tests : mock chaque endpoint, vérifier sélection.
 
-**MCP server (routes/mcp.py)**
-- `GET /mcp` → manifest JSON (tools: chat, providers_status)
-- `POST /mcp/tools/chat` → route vers provider, retourne format MCP
-- `POST /mcp/tools/providers_status` → statuses JSON
-- Protocole JSON pur, zéro SDK externe
-
-### Tests
-- 89 tests, 90% coverage global
-- Nouveaux : `test_sambanova_provider.py`, `test_openrouter_provider.py`, `test_cache.py`, `test_mcp.py`
-
-### Site (maxia-hub/freeai.html)
-- Guide install Docker en 4 étapes
-- Badge compteur d'installations en temps réel
-- i18n 8 langues
-
-### VPS (maxiaworld.app)
-- Counter service FastAPI port 8005 (systemd `freeai-counter`)
-- nginx `/counter/` → proxy 8005
-
-### GitHub
-- Repo : https://github.com/MAXIAWORLD/freeiaforge
-- Branch master, commit `6dc3781`
+Ce fix résout aussi : nouveaux modèles annoncés = plus besoin de release manuelle, FreeIA s'adapte tout seul.
 
 ---
 
-## Ce qui reste
+## État v0.5.0 (commit `af11efe` du 2026-05-07)
 
-- [ ] README.md GitHub : documenter Ollama + PROVIDER_ORDER + entrypoint auto
-- [ ] Tester install complète depuis zéro (clone → docker compose → AnythingLLM) — vérifier que .env est auto-créé
-- [ ] Tester intégration MCP bout-en-bout avec Claude Code (`mcp_servers.json`)
-- [ ] Tester Ollama end-to-end (Ollama installé en local, `docker compose up`, requête → "ollama" dans response)
-- [ ] Vérifier noms de modèles Sambanova exacts sur API prod (Llama-3.1-405B-Instruct exact ?)
-- [ ] Archiver `freeaiagregator` (ancien repo) sur GitHub
-- [ ] Semantic cache : envisager upgrade ChromaDB si cache exact SHA-256 insuffisant
+- 8 providers : Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → Ollama
+- Endpoints : `/v1/chat/completions` (OpenAI), `/v1/messages` (Anthropic), `/v1/models`, `/v1/providers`, `/health`, `/mcp/*`
+- Streaming SSE avec header `X-Provider`
+- Semantic cache SQLite (TTL 1h)
+- Quota manager par provider (reset daily)
+- MCP server natif (3 tools)
+- Tests : 178+ verts (12 health route après ajout /v1/models)
 
-## Décisions prises
+## Stack
 
-- Cache = SQLite SHA-256 (chromadb absent de requirements.txt) — cache exact suffisant pour v0.2
-- MCP = JSON pur FastAPI sans SDK (SDK Python MCP trop instable en 2026)
-- Sambanova model hint = override `complete()` dans subclass (thread-safe, pas de mutation partagée)
-- OpenRouter headers = override `complete()` (scope isolé, pas de modif base.py)
-- Signal routing = déterministe in-memory, zéro latence ajoutée (pas de classification NLP)
+- Python 3.12 + FastAPI + httpx + Pydantic V2
+- SQLite (quotas + cache)
+- Docker Compose (port 8002)
+- Image publiée : `maxiaworld/freeiaforge:latest`
 
-## Config MCP pour Claude Code
+## Repo public
 
-```json
-// ~/.claude/mcp_servers.json ou .claude/mcp_servers.json
-{
-  "freeai-gateway": {
-    "type": "http",
-    "url": "http://localhost:8002/mcp"
-  }
-}
-```
+`https://github.com/MAXIAWORLD/freeiaforge` — MIT, 178 tests, prêt à être cloné.
 
-## Prochaine action
+---
 
-README GitHub : documenter MCP + tester intégration MCP bout-en-bout avec Claude Code.
+## Notes pour la prochaine session
+
+1. **Lire ce HANDOFF avant toute action** — le bug AnythingLLM "Premature close" est la priorité.
+2. **Demander les logs Docker au user** : `docker compose logs --tail=50 backend` après tentative AnythingLLM.
+3. **Hypothèse principale** : le streaming SSE plante avec une erreur provider (401 Cerebras ?) qui n'est pas correctement remontée → connexion fermée → "Premature close" côté client. Voir `routes/chat.py::chat_completions` et `services/router.py::route_stream`.
+4. **Reproduire localement** : lancer le backend avec `CEREBRAS_API_KEY=invalid`, faire une requête streaming → observer le comportement.

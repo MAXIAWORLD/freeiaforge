@@ -41,12 +41,54 @@ class Provider(ABC):
         raise NotImplementedError(f"{self.name} does not support streaming")
         yield  # pragma: no cover — makes this an async generator
 
+    async def discover_default_model(self, api_key: str) -> str:
+        """Return the default model id, optionally refreshed from the provider's
+        live model list. Default impl keeps the hardcoded value; subclasses that
+        expose a /models endpoint override this."""
+        return getattr(self, "default_model", "")
+
 
 class OpenAICompatibleProvider(Provider):
     """Base for providers exposing OpenAI-compatible /v1/chat/completions."""
 
     base_url: str
     default_model: str
+
+    async def discover_default_model(self, api_key: str) -> str:
+        if not api_key:
+            return self.default_model
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{self.base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                r.raise_for_status()
+                payload = r.json()
+        except (httpx.HTTPError, ValueError):
+            return self.default_model
+
+        if not isinstance(payload, dict):
+            return self.default_model
+        raw = payload.get("data") or payload.get("models") or []
+        models: list[str] = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                model_id = entry.get("id") or entry.get("name") or ""
+                if isinstance(model_id, str) and model_id:
+                    models.append(model_id)
+            elif isinstance(entry, str):
+                models.append(entry)
+        if not models:
+            return self.default_model
+        return self._select_best_model(models)
+
+    def _select_best_model(self, models: list[str]) -> str:
+        """Select the best model for chat. Default: keep hardcoded if still
+        listed, otherwise pick the first available."""
+        if self.default_model in models:
+            return self.default_model
+        return models[0]
 
     async def complete(self, request: ChatRequest, api_key: str) -> ProviderResult:
         payload: dict = {

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
 import aiosqlite
+
+# Refresh provider default_model from each provider's /models endpoint at
+# startup, then every 24h while the server runs.
+_MODEL_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
 logging.basicConfig(
     level=logging.INFO,
@@ -114,15 +119,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         else None
     )
 
-    set_router(
-        ProviderRouter(
-            providers=providers,
-            quota=quota,
-            api_keys=api_keys,
-            cache=cache,
-            provider_order=provider_order,
-        )
+    router_instance = ProviderRouter(
+        providers=providers,
+        quota=quota,
+        api_keys=api_keys,
+        cache=cache,
+        provider_order=provider_order,
     )
+    set_router(router_instance)
 
     # Ollama sentinel "local" doesn't count as an external key
     active = sum(1 for k, v in api_keys.items() if v and k != "ollama")
@@ -131,8 +135,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         active,
         len(providers) - 1,
     )
-    yield
-    await close_db(db)
+
+    await router_instance.refresh_default_models()
+
+    async def _periodic_refresh() -> None:
+        while True:
+            await asyncio.sleep(_MODEL_REFRESH_INTERVAL_SECONDS)
+            try:
+                await router_instance.refresh_default_models()
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning("Periodic model refresh failed: %s", exc)
+
+    refresh_task = asyncio.create_task(_periodic_refresh())
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await close_db(db)
 
 
 app = FastAPI(title="FreeIA Gateway", version="0.5.0", lifespan=lifespan)

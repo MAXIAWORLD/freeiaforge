@@ -55,6 +55,32 @@ class ProviderRouter:
         # State d'erreur in-memory : {provider_name: {consecutive_errors, last_error, last_used_at}}
         self._error_state: dict[str, dict] = {}
 
+    async def refresh_default_models(self) -> None:
+        """Query each configured provider's /models endpoint and update its
+        default_model accordingly. Failures are non-fatal (keep hardcoded)."""
+
+        async def _refresh(provider: Provider) -> None:
+            api_key = self._api_keys.get(provider.name, "")
+            if not api_key:
+                return
+            previous = getattr(provider, "default_model", "")
+            try:
+                fresh = await provider.discover_default_model(api_key)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "[%s] discover_default_model failed: %s", provider.name, exc
+                )
+                return
+            if fresh and fresh != previous:
+                logger.info(
+                    "[%s] default_model: %s → %s", provider.name, previous, fresh
+                )
+                provider.default_model = fresh  # type: ignore[attr-defined]
+
+        await asyncio.gather(
+            *(_refresh(p) for p in self._providers), return_exceptions=True
+        )
+
     @staticmethod
     def _apply_order(providers: list[Provider], order: list[str]) -> list[Provider]:
         by_name = {p.name: p for p in providers}

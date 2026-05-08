@@ -60,7 +60,7 @@ class TestOpenRouterProviderAttributes:
         from providers.openrouter import OpenRouterProvider
 
         p = OpenRouterProvider()
-        assert p.default_model == "openrouter/free"
+        assert p.default_model == "meta-llama/llama-3.3-70b-instruct:free"
 
     def test_priority_is_7(self):
         from providers.openrouter import OpenRouterProvider
