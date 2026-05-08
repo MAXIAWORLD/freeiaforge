@@ -18,14 +18,41 @@ If a provider hits its daily limit or returns an error, the next one takes over 
 
 ## Install
 
-**Prerequisites:** Docker Desktop + any OpenAI-compatible client (AnythingLLM, LibreChat, Cursor…)
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) + [Git](https://git-scm.com/download/win) (Windows). Any OpenAI-compatible client works (AnythingLLM, LibreChat, Cursor…).
 
-**Option 1 — Docker Hub (recommended):**
+### Quick start (recommended)
+
 ```bash
-docker pull maxiaworld/freeiaforge
+git clone https://github.com/MAXIAWORLD/freeiaforge
+cd freeiaforge
 ```
 
-Then create a `docker-compose.yml`:
+Then run the launcher script that handles `.env` creation for you:
+
+- **Windows (PowerShell):** `.\start.ps1`
+- **Mac / Linux:** `./start.sh`
+
+The script creates `backend/.env` from `.env.example` on first run, prompts you to paste at least one API key (Cerebras is the easiest — get a free key at https://cloud.cerebras.ai), then starts Docker. API runs at `http://localhost:8002`.
+
+### Manual install
+
+If you prefer not to use the launcher:
+
+```bash
+git clone https://github.com/MAXIAWORLD/freeiaforge
+cd freeiaforge
+cp backend/.env.example backend/.env   # Windows: copy backend\.env.example backend\.env
+# Edit backend/.env and paste your API key(s)
+docker compose up --build
+```
+
+### Docker Hub image
+
+```bash
+docker pull maxiaworld/freeiaforge:latest
+```
+
+Use it in your own `docker-compose.yml`:
 ```yaml
 services:
   freeiaforge:
@@ -33,7 +60,8 @@ services:
     ports:
       - "8002:8002"
     env_file:
-      - .env
+      - path: backend/.env
+        required: false
     volumes:
       - freeai_data:/app/data
     extra_hosts:
@@ -43,19 +71,6 @@ services:
 volumes:
   freeai_data:
 ```
-
-Copy `.env.example` → `.env`, fill in your API keys, then `docker compose up`.
-
-**Option 2 — build from source:**
-```bash
-git clone https://github.com/MAXIAWORLD/freeiaforge
-cd freeiaforge
-docker compose up --build
-```
-
-`backend/.env` is **auto-created** on first start from `.env.example` — no manual `cp` needed. Just edit it after the first run.
-
-API runs at `http://localhost:8002`
 
 ---
 
