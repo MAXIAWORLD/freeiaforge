@@ -124,6 +124,26 @@ async def test_providers_has_consecutive_errors_field():
 
 
 @pytest.mark.asyncio
+async def test_models_returns_openai_compatible_list():
+    """GET /v1/models doit retourner le format OpenAI {object:'list', data:[...]}."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.get("/v1/models")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["object"] == "list"
+    assert isinstance(data["data"], list)
+    assert len(data["data"]) >= 1
+    ids = {m["id"] for m in data["data"]}
+    assert "freeai-gateway" in ids
+    for entry in data["data"]:
+        assert entry["object"] == "model"
+        assert "created" in entry
+        assert "owned_by" in entry
+
+
+@pytest.mark.asyncio
 async def test_providers_last_error_populated_after_failure():
     """last_error doit être non-null quand le provider a échoué."""
     statuses = [

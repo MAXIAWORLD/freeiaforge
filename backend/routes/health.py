@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter
 from core.models import ProviderStatus
 from routes.chat import get_router
@@ -24,3 +26,25 @@ async def providers() -> list[ProviderStatus]:
 @router.get("/v1/providers/status", response_model=list[ProviderStatus])
 async def providers_status() -> list[ProviderStatus]:
     return await _providers_handler()
+
+
+@router.get("/v1/models")
+async def models() -> dict:
+    created = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "freeai-gateway",
+                "object": "model",
+                "created": created,
+                "owned_by": "freeai",
+            },
+            {
+                "id": "freeai",
+                "object": "model",
+                "created": created,
+                "owned_by": "freeai",
+            },
+        ],
+    }
