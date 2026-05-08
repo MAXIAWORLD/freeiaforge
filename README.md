@@ -29,8 +29,10 @@ cd freeiaforge
 
 Then run the launcher script that handles `.env` creation for you:
 
-- **Windows (PowerShell):** `.\start.ps1`
+- **Windows:** double-click `start.bat` (or `.\start.bat` in any terminal)
 - **Mac / Linux:** `./start.sh`
+
+> Windows users can also use `.\start.ps1` from PowerShell, but `.bat` runs without any execution policy hassle.
 
 The script creates `backend/.env` from `.env.example` on first run, prompts you to paste at least one API key (Cerebras is the easiest — get a free key at https://cloud.cerebras.ai), then starts Docker. API runs at `http://localhost:8002`.
 
