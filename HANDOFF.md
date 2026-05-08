@@ -42,9 +42,20 @@ Modèles suspects à auditer :
 - `mistral.py` : `mistral-large-latest`
 - `groq.py` : `llama-3.3-70b-versatile`
 
-### Priorité #1 prochaine session — auto-discovery des modèles
+### ~~Priorité #1 prochaine session — auto-discovery des modèles~~ ✅ DONE
 
-Plus de hardcode. Au boot de chaque provider, appeler son endpoint de listing pour récupérer la liste réelle, choisir le meilleur dispo, le stocker comme `default_model`. Refresh toutes les 24h.
+**Commit `7a1c2db` — auto-discovery livré et pushed.**
+
+- `Provider.discover_default_model(api_key)` ajouté
+- Generic `OpenAICompatibleProvider` appelle `{base_url}/models`
+- Heuristics par provider (Cerebras / Groq / Mistral / OpenRouter / Gemini)
+- HuggingFace skipped (URL avec model dans le path, listing non standard)
+- `ProviderRouter.refresh_default_models()` parallélise via `asyncio.gather`
+- `main.py` : refresh au boot + toutes les 24h en background task
+- 18 tests TDD verts dans `test_model_discovery.py` (158 total dans la suite)
+- OpenRouter `default_model` corrigé : `openrouter/free` (invalide) → `meta-llama/llama-3.3-70b-instruct:free`
+
+Pour activer côté user : `git pull` + `docker compose up --build`. Au boot, les logs montrent `[provider] default_model: X → Y` pour chaque modèle déprécié remplacé.
 
 | Provider | Endpoint listing |
 |---|---|
