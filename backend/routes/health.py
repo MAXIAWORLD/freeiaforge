@@ -31,20 +31,32 @@ async def providers_status() -> list[ProviderStatus]:
 @router.get("/v1/models")
 async def models() -> dict:
     created = int(time.time())
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "freeai-gateway",
-                "object": "model",
-                "created": created,
-                "owned_by": "freeai",
-            },
-            {
-                "id": "freeai",
-                "object": "model",
-                "created": created,
-                "owned_by": "freeai",
-            },
-        ],
-    }
+    router_instance = get_router()
+    api_keys = getattr(router_instance, "_api_keys", {})
+    providers = getattr(router_instance, "_providers", [])
+
+    data: list[dict] = [
+        {
+            "id": "freeai-gateway",
+            "object": "model",
+            "created": created,
+            "owned_by": "freeai",
+        }
+    ]
+
+    seen_ids: set[str] = {"freeai-gateway"}
+    for provider in providers:
+        if provider.name == "ollama" or api_keys.get(provider.name):
+            model_id = getattr(provider, "default_model", None)
+            if model_id and model_id not in seen_ids:
+                data.append(
+                    {
+                        "id": model_id,
+                        "object": "model",
+                        "created": created,
+                        "owned_by": provider.name,
+                    }
+                )
+                seen_ids.add(model_id)
+
+    return {"object": "list", "data": data}

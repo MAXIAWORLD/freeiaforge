@@ -123,24 +123,78 @@ async def test_providers_has_consecutive_errors_field():
     assert r.json()[0]["consecutive_errors"] == 0
 
 
+def make_mock_router_with_providers(api_keys: dict[str, str] | None = None):
+    if api_keys is None:
+        api_keys = {"cerebras": "csk-test"}
+    mock_router = MagicMock()
+    mock_router._api_keys = api_keys
+    cerebras_provider = MagicMock()
+    cerebras_provider.name = "cerebras"
+    cerebras_provider.default_model = "llama-3.3-70b"
+    groq_provider = MagicMock()
+    groq_provider.name = "groq"
+    groq_provider.default_model = "llama-3.3-70b-versatile"
+    ollama_provider = MagicMock()
+    ollama_provider.name = "ollama"
+    ollama_provider.default_model = "llama3.2"
+    mock_router._providers = [cerebras_provider, groq_provider, ollama_provider]
+    return mock_router
+
+
 @pytest.mark.asyncio
 async def test_models_returns_openai_compatible_list():
     """GET /v1/models doit retourner le format OpenAI {object:'list', data:[...]}."""
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        r = await client.get("/v1/models")
+    with patch(
+        "routes.health.get_router", return_value=make_mock_router_with_providers()
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.get("/v1/models")
     assert r.status_code == 200
     data = r.json()
     assert data["object"] == "list"
     assert isinstance(data["data"], list)
-    assert len(data["data"]) >= 1
     ids = {m["id"] for m in data["data"]}
     assert "freeai-gateway" in ids
     for entry in data["data"]:
         assert entry["object"] == "model"
         assert "created" in entry
         assert "owned_by" in entry
+
+
+@pytest.mark.asyncio
+async def test_models_includes_provider_models_when_keys_set():
+    """GET /v1/models inclut les default_model des providers ayant une clé API."""
+    with patch(
+        "routes.health.get_router",
+        return_value=make_mock_router_with_providers({"cerebras": "csk-test"}),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.get("/v1/models")
+    ids = {m["id"] for m in r.json()["data"]}
+    assert "llama-3.3-70b" in ids  # cerebras
+    assert "llama3.2" in ids  # ollama (no key needed)
+    assert "llama-3.3-70b-versatile" not in ids  # groq has no key
+
+
+@pytest.mark.asyncio
+async def test_models_skips_providers_without_keys():
+    """Sans clé API, les providers cloud n'apparaissent pas (sauf Ollama)."""
+    with patch(
+        "routes.health.get_router",
+        return_value=make_mock_router_with_providers({}),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            r = await client.get("/v1/models")
+    ids = {m["id"] for m in r.json()["data"]}
+    assert "freeai-gateway" in ids
+    assert "llama3.2" in ids  # ollama always present
+    assert "llama-3.3-70b" not in ids  # cerebras has no key
 
 
 @pytest.mark.asyncio
