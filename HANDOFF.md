@@ -96,7 +96,7 @@ Multi-user, cloud sync, marketplace skills, verticales métier, business / moné
 
 ## Phase A jour 2 — LIVRÉ 2026-05-10
 
-### Credential pools (DONE — commits `0fde0d3` pool service + `7d20b2f` SQLite persistence)
+### Credential pools (DONE — commits `748e4d1` pool service + `7d20b2f` SQLite persistence)
 - `services/credential_pool.py` : multi-key per provider, fill_first selection, 24h cooldown
 - Triggers cooldown sur 401/402/429 ; 500/503/network errors ne touchent pas la clé (territoire circuit breaker du router)
 - ProviderRouter accepte `credential_pool=` optionnel ; backward-compat via api_keys dict
@@ -195,7 +195,7 @@ Auto-détection Ollama au démarrage (`GET http://localhost:11434/api/tags`), af
 - Tests : 158 → 165 verts (TDD strict, RED→GREEN sur tous les nouveaux comportements)
 
 **Jour 2** :
-- Pool credentials service + wire router + persistence SQLite : commits `0fde0d3` + `7d20b2f`
+- Pool credentials service + wire router + persistence SQLite : commits `748e4d1` + `7d20b2f`
 - Multi-key support via `XXX_API_KEYS=k1,k2,k3` env vars, backward-compat sur single keys
 - Cooldown 24h sur 401/402/429 ; SHA-256 hash en DB jamais la clé en clair
 - Tests : 165 → 192 verts (+27 dont 7 sur la persistence)
