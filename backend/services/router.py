@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -34,6 +35,53 @@ _CEREBRAS_CHAR_LIMIT = 24_000
 
 # TTL par défaut pour le cache (en secondes)
 _DEFAULT_CACHE_TTL = 3600
+
+
+_DONE_CHUNK = "data: [DONE]\n\n"
+
+
+async def _safe_stream(
+    provider_name: str, inner: AsyncIterator[str]
+) -> AsyncIterator[str]:
+    """Wrap a provider stream so that:
+
+    - The SSE termination ``data: [DONE]\\n\\n`` is always emitted exactly once.
+    - ``ProviderError`` and unexpected exceptions are converted into an OpenAI-style
+      error chunk + ``[DONE]`` instead of propagating (which would close the
+      response brutally and trigger 'Premature close' on AnythingLLM/LibreChat).
+    """
+    done_seen = False
+    try:
+        async for line in inner:
+            if "[DONE]" in line:
+                done_seen = True
+            yield line
+    except ProviderError as exc:
+        payload = {
+            "error": {
+                "message": str(exc),
+                "type": "provider_error",
+                "provider": provider_name,
+                "code": exc.status_code,
+            }
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+        logger.warning(
+            "Stream from %s raised ProviderError: %s", provider_name, exc
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        payload = {
+            "error": {
+                "message": f"unexpected: {type(exc).__name__}: {exc}",
+                "type": "internal_error",
+                "provider": provider_name,
+            }
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+        logger.exception("Stream from %s raised unexpected exception", provider_name)
+    finally:
+        if not done_seen:
+            yield _DONE_CHUNK
 
 
 class ProviderRouter:
@@ -257,7 +305,7 @@ class ProviderRouter:
                 raise RuntimeError(f"Provider '{hint}' not available: quota exhausted")
             await self._quota.record_usage(hint, requests=1, tokens=0)
             self._on_success(hint)
-            return hint, target.stream(request, key)
+            return hint, _safe_stream(hint, target.stream(request, key))
 
         for provider in self._providers:
             key = self._api_keys.get(provider.name, "")
@@ -269,7 +317,9 @@ class ProviderRouter:
                 continue
             await self._quota.record_usage(provider.name, requests=1, tokens=0)
             self._on_success(provider.name)
-            return provider.name, provider.stream(request, key)
+            return provider.name, _safe_stream(
+                provider.name, provider.stream(request, key)
+            )
 
         raise RuntimeError("All providers exhausted")
 

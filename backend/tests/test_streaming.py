@@ -1,16 +1,18 @@
 """
 TDD — P1 streaming SSE + P2 X-Provider header (v0.5.0)
++ Phase A v0.6.0 — _safe_stream guarantees [DONE] + error chunks
 """
 
 from __future__ import annotations
 
+import json
 import pytest
 from httpx import AsyncClient, ASGITransport
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from main import app
 from core.models import ChatResponse, ChatChoice, ChatUsage, Message
-from providers.base import ProviderResult
+from providers.base import ProviderResult, ProviderError
 
 
 # ---------------------------------------------------------------------------
@@ -205,3 +207,91 @@ async def test_non_streaming_x_provider_matches_actual_provider():
             )
 
     assert r.headers.get("x-provider") == "cerebras"
+
+
+# ---------------------------------------------------------------------------
+# Phase A v0.6.0 — _safe_stream guarantees [DONE] + error chunks
+# Fix Premature close on AnythingLLM/LibreChat
+# ---------------------------------------------------------------------------
+
+
+async def _gen_no_done():
+    """Provider that yields chunks but forgets the final [DONE] sentinel."""
+    yield 'data: {"id":"c1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+    yield 'data: {"id":"c1","choices":[{"delta":{"content":" there"}}]}\n\n'
+
+
+async def _gen_with_done():
+    """Provider that yields the canonical SSE termination."""
+    yield 'data: {"id":"c1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
+    yield "data: [DONE]\n\n"
+
+
+async def _gen_raise_at_open():
+    """Provider that raises before yielding any chunk (e.g. 401 on raise_for_status)."""
+    raise ProviderError("cerebras", status_code=401, reason="invalid api key")
+    yield  # pragma: no cover
+
+
+async def _gen_raise_mid_stream():
+    """Provider that raises after yielding some content (e.g. timeout mid-stream)."""
+    yield 'data: {"id":"c1","choices":[{"delta":{"content":"par"}}]}\n\n'
+    raise ProviderError("groq", reason="network error: ReadTimeout")
+
+
+@pytest.mark.asyncio
+async def test_safe_stream_emits_done_when_provider_omits_it():
+    """Wrapper must append [DONE] when the provider stream ends without it."""
+    from services.router import _safe_stream
+
+    chunks = [chunk async for chunk in _safe_stream("groq", _gen_no_done())]
+    assert chunks[-1] == "data: [DONE]\n\n"
+    assert any('"Hi"' in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_safe_stream_does_not_double_done_when_provider_emits_it():
+    """Wrapper must not append a second [DONE] when the provider already sent one."""
+    from services.router import _safe_stream
+
+    chunks = [chunk async for chunk in _safe_stream("groq", _gen_with_done())]
+    done_count = sum(1 for c in chunks if "[DONE]" in c)
+    assert done_count == 1
+
+
+@pytest.mark.asyncio
+async def test_safe_stream_converts_provider_error_to_error_chunk():
+    """Wrapper catches ProviderError raised before any chunk and yields an error + [DONE]."""
+    from services.router import _safe_stream
+
+    chunks = [chunk async for chunk in _safe_stream("cerebras", _gen_raise_at_open())]
+    assert chunks[-1] == "data: [DONE]\n\n"
+    error_chunk = next(c for c in chunks if '"error"' in c)
+    payload = json.loads(error_chunk.removeprefix("data: ").strip())
+    assert payload["error"]["provider"] == "cerebras"
+    assert payload["error"]["code"] == 401
+
+
+@pytest.mark.asyncio
+async def test_safe_stream_converts_mid_stream_error_to_error_chunk():
+    """Wrapper catches ProviderError mid-stream, keeps already-yielded chunks + appends error + [DONE]."""
+    from services.router import _safe_stream
+
+    chunks = [chunk async for chunk in _safe_stream("groq", _gen_raise_mid_stream())]
+    assert chunks[-1] == "data: [DONE]\n\n"
+    assert any('"par"' in c for c in chunks)
+    assert any('"error"' in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_safe_stream_handles_unexpected_exception():
+    """Wrapper catches any unexpected exception, converts to error chunk + [DONE] (never propagates)."""
+    from services.router import _safe_stream
+
+    async def _gen_unexpected():
+        yield 'data: {"x":1}\n\n'
+        raise ValueError("boom")
+
+    chunks = [chunk async for chunk in _safe_stream("any", _gen_unexpected())]
+    assert chunks[-1] == "data: [DONE]\n\n"
+    assert any('"error"' in c for c in chunks)
