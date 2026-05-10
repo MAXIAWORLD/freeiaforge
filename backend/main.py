@@ -209,7 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await close_db(db)
 
 
-app = FastAPI(title="freeaigate", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="freeaigate", version="0.6.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

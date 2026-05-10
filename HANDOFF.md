@@ -1,11 +1,12 @@
 # HANDOFF — freeaigate (ex-FreeIA Gateway / freeiaforge)
 
-**Date dernière session :** 2026-05-10 (Phase A jours 1 + 2 livrés)
-**État :** v0.5.0 + Phase A 50% (rebrand + Premature close fix + credential pool complet). Reste Phase A : circuit breaker SQLite persistance, validation clés boot + logs JSON.
+**Date dernière session :** 2026-05-10 (Phase A complète, v0.6.0)
+**État :** Phase A 100% livrée. Prochaine étape : Phase B (clés payantes + modes routing + budget cap).
 **Branche :** master
 **Repo :** `freeiaforge` (path filesystem inchangé, repo GitHub idem ; rebrand interne fait dans strings + image Docker)
 **Tag backup :** `freeiaforge-pre-rebrand-2026-05-10` sur HEAD `53fb54a`
-**Tests :** 192 verts (158 baseline + 2 alias + 5 _safe_stream + 27 credential pool)
+**Tag release :** `freeaigate-v0.6.0` (à pusher après ce HANDOFF)
+**Tests :** 210 verts (158 baseline + 2 alias + 5 _safe_stream + 27 credential pool + 5 circuit_state + 8 key_validator + 5 logging_config)
 
 ---
 
@@ -106,17 +107,68 @@ Multi-user, cloud sync, marketplace skills, verticales métier, business / moné
 
 ---
 
-## Première action prochaine session — Phase A jour 3 : circuit breaker SQLite
+## Phase A jours 3, 4 et 5 — LIVRÉ 2026-05-10
 
-### 1. Persister circuit breaker SQLite (1-2h)
-Aujourd'hui `_error_state` (RAM) reset au moindre restart. Table `circuit_state(provider, consecutive_errors, last_error, last_used_at)` ; PK `provider`. Hooks dans `_on_success` et `_on_error`. Restore au boot.
+### Jour 3 — Circuit breaker SQLite (DONE — commit `d4e1a81`)
+- Table `circuit_state(provider, consecutive_errors, last_error, last_used_at)` ; PK `provider`
+- `ProviderRouter._on_success`/`_on_error` désormais async, persistent à chaque transition
+- `restore_circuit_state()` recharge l'état au boot ; safe no-op sans db
+- TDD : 5 tests (persist, increment, reset on success, restore, no-db backward-compat)
 
-### 2. Validation clés au démarrage + logs JSON (2-3h)
-- Ping endpoint léger par provider au boot via `discover_default_model` étendu, log valides/invalides
-- Logs JSON via `python-json-logger` + `RotatingFileHandler` 10×10 MB
-- Au boot : `freeaigate ready — N/M cloud providers active` doit lister les clés invalidées en plus
+### Jour 4 — Validation clés au boot (DONE — commit `1399491`)
+- `Provider.validate_key(api_key)` : default True (Ollama/no-auth) ; OpenAICompatibleProvider override avec `GET /models` (401/403 → False, 5xx/network → True clé non punie)
+- `services/key_validator.py::validate_keys(providers, pool)` itère le pool, mark_failure(401) sur clé rejetée, retourne stats `{provider: {valid, invalid}}`
+- main.py probe au boot et log warning sur clés invalidées
+- TDD : 8 tests (list_keys, marks invalid, leaves valid, stats, no-key skip, calls every key, default True)
 
-**Fin Phase A : tag `freeaigate-v0.6.0`**
+### Jour 5 — Logs JSON (DONE — commit `1399491`)
+- `core/logging_config.py::JsonFormatter` (in-tree, sans dep `python-json-logger`) : 1 JSON object/ligne + propagation des `extra={}`
+- `configure_logging(log_dir, level)` : stream handler stdout (UX docker compose logs) + RotatingFileHandler `data/logs/freeaigate.log` 10×10 MB (~100 MB cap), idempotent
+- main.py : `configure_logging` remplace `logging.basicConfig`, log_dir configurable via `FREEAIGATE_LOG_DIR`
+- TDD : 5 tests (formatter core fields, exception traceback, extras propagation, file creation, RotatingFileHandler attaché)
+
+---
+
+## Phase A — RÉCAP COMPLÈTE 2026-05-10
+
+8 commits feature, 158 → 210 verts, tag `freeaigate-v0.6.0` :
+
+| # | Commit | Sujet |
+|---|---|---|
+| 1 | `18c320e` | rebrand strings + alias `freeaigate` |
+| 2 | `c05f7dd` (monorepo) | CI workflow Docker double-tag |
+| 3 | `e480e17` | fix Premature close (`_safe_stream`) |
+| 4 | `748e4d1` | CredentialPool service + rotation + cooldown |
+| 5 | `7d20b2f` | pool persistence SQLite (SHA-256 hash) |
+| 6 | `d4e1a81` | circuit_state SQLite persistence |
+| 7 | `1399491` | startup key validation + JSON rotating logs |
+
+**Action manuelle Alexis avant le prochain release tag** : créer le repo Docker Hub `maxiaworld/freeaigate`. Sinon le workflow CI échouera.
+
+---
+
+## Première action prochaine session — Phase B : clés payantes + budget
+
+### 1. Clés payantes (OpenAI, Anthropic, DeepSeek)
+- Étendre `.env` : `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`
+- 3 nouveaux providers, intégrés dans le pool
+- Gardés à priorité basse par défaut (free-tier first)
+
+### 2. Modes de routing
+- Header `X-Mode` : `cheap` (free-tier seul), `quality` (force OpenAI/Anthropic), `auto` (cascade complète)
+- Mode `cheap` est le défaut, garantit "$0 tant que free-tier disponible"
+
+### 3. Budget cap quotidien
+- Setting `DAILY_BUDGET_USD=5.0` (défaut)
+- Tracker depenses cumulées via tokens × pricing dans la DB
+- Si dépassement : forcer `cheap` (skip clés payantes le reste de la journée)
+- Reset à minuit UTC
+
+### 4. Provider order user UI (drag-drop)
+- Pour Phase G plus tard (frontend), pas Phase B
+- Phase B garde juste l'ordre via `PROVIDER_ORDER` env var (déjà fait)
+
+**Fin Phase B : tag `freeaigate-v0.7.0`**
 
 ---
 
