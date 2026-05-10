@@ -12,17 +12,14 @@ import aiosqlite
 # startup, then every 24h while the server runs.
 _MODEL_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    datefmt="%H:%M:%S",
-)
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import get_settings
 from core.database import close_db, init_db
+from core.logging_config import configure_logging
+
+configure_logging(log_dir=os.environ.get("FREEAIGATE_LOG_DIR", "data/logs"))
 from providers.cerebras import CerebrasProvider
 from providers.gemini import GeminiProvider
 from providers.groq import GroqProvider
@@ -38,6 +35,7 @@ from routes.health import router as health_router
 from routes.mcp import router as mcp_router
 from services.cache import SemanticCache
 from services.credential_pool import CredentialPool
+from services.key_validator import validate_keys
 from services.quota import QuotaService
 from services.router import ProviderRouter
 
@@ -144,6 +142,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         OpenRouterProvider(),
         OllamaProvider(base_url=settings.ollama_base_url, model=settings.ollama_model),
     ]
+
+    # Probe each configured key once so 401/403 keys land on cooldown before
+    # any user request hits them. 5xx/network errors leave keys untouched.
+    key_stats = await validate_keys(providers, pool)
+    for provider_name, counts in key_stats.items():
+        if counts.get("invalid", 0):
+            logger.warning(
+                "[%s] %d/%d api_keys rejected at startup",
+                provider_name,
+                counts["invalid"],
+                counts["valid"] + counts["invalid"],
+            )
     cache: SemanticCache | None = None
     if settings.cache_enabled:
         from pathlib import Path

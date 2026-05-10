@@ -47,12 +47,43 @@ class Provider(ABC):
         expose a /models endpoint override this."""
         return getattr(self, "default_model", "")
 
+    async def validate_key(self, api_key: str) -> bool:
+        """Return True if the api_key is accepted by the provider.
+
+        Default implementation assumes the key is valid (used by providers
+        without auth such as Ollama). OpenAI-compatible providers override
+        this with a lightweight GET /models probe.
+        """
+        return True
+
 
 class OpenAICompatibleProvider(Provider):
     """Base for providers exposing OpenAI-compatible /v1/chat/completions."""
 
     base_url: str
     default_model: str
+
+    async def validate_key(self, api_key: str) -> bool:  # type: ignore[override]
+        """Probe ``GET {base_url}/models`` with the key.
+
+        - 2xx → key is valid (or at least usable).
+        - 401/403 → key is rejected — caller should put it on cooldown.
+        - Anything else (5xx, network error, timeout) is treated as a
+          provider-side issue and the key is left untouched.
+        """
+        if not api_key:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{self.base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+        except httpx.HTTPError:
+            return True  # transient: don't punish the key
+        if r.status_code in (401, 403):
+            return False
+        return True
 
     async def discover_default_model(self, api_key: str) -> str:
         if not api_key:

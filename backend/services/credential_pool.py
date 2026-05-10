@@ -71,6 +71,15 @@ class CredentialPool:
     def has_keys(self, provider: str) -> bool:
         return bool(self._keys.get(provider))
 
+    def list_keys(self, provider: str) -> list[str]:
+        """Return the api_keys registered for ``provider`` in fill_first order.
+
+        Useful for boot-time validation: callers iterate the keys, probe each
+        one, and call ``mark_failure`` on the rejected ones so the next
+        ``next_key`` skips straight to a healthy key.
+        """
+        return [state.api_key for state in self._keys.get(provider, [])]
+
     async def restore(self) -> None:
         """Load persisted cooldowns from SQLite into in-memory state.
 
