@@ -1,9 +1,11 @@
 # HANDOFF — freeaigate (ex-FreeIA Gateway / freeiaforge)
 
-**Date dernière session :** 2026-05-10
-**État :** v0.5.0 + 6 fixes UX + auto-discovery modèles, **direction produit recadrée**, plan v1.0 verrouillé
+**Date dernière session :** 2026-05-10 (suite — Phase A jour 1 livré)
+**État :** v0.5.0 + Phase A jour 1 livré (rebrand strings + Premature close fix). Reste Phase A : credential pools, circuit breaker SQLite persisté, validation clés boot + logs JSON.
 **Branche :** master
-**Repo :** `freeiaforge` (rename interne en `freeaigate` à faire Phase A)
+**Repo :** `freeiaforge` (path filesystem inchangé, repo GitHub idem ; rebrand interne fait dans strings + image Docker)
+**Tag backup :** `freeiaforge-pre-rebrand-2026-05-10` sur HEAD `53fb54a`
+**Tests :** 165 verts (158 baseline + 2 alias TDD + 5 _safe_stream TDD)
 
 ---
 
@@ -65,30 +67,36 @@ Multi-user, cloud sync, marketplace skills, verticales métier, business / moné
 
 ---
 
-## Première action prochaine session — Phase A jour 1
+## Phase A jour 1 — LIVRÉ 2026-05-10
 
-### 1. Rename `freeiaforge` → `freeaigate` (1-2h)
-- Code Python : tous les imports, tous les `freeiaforge`/`FreeIA Gateway` partout
-- `pyproject.toml`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`
-- `README.md` FR + EN, landing pages, scripts `start.bat/.ps1/.sh`
-- Image Docker : `maxiaworld/freeiaforge` → `maxiaworld/freeaigate` (re-publish)
-- Service docker-compose, port reste 8002
-- Commit `feat(rebrand): freeiaforge → freeaigate`
+### 1. Rebrand strings (DONE — commits `18c320e` freeiaforge + `c05f7dd` monorepo)
+- Décision : path filesystem **conservé** (`freeiaforge/`), repo GitHub idem. Le rebrand est dans :
+  - main.py title FastAPI + log line, providers/openrouter.py X-Title, README.md (titre + corps + exemples), .env.example header
+  - `_GATEWAY_ALIASES` étendu avec `freeaigate` (sambanova) — backward-compat `freeai-gateway` conservé
+  - `/v1/models` expose `freeaigate` ET `freeai-gateway`
+  - CI workflow Docker pousse 4 tags : `maxiaworld/freeaigate:{latest,version}` + `maxiaworld/freeiaforge:{latest,version}`
+- ⚠️ **Action Alexis manuelle requise avant prochain release tag** : créer le repo Docker Hub `maxiaworld/freeaigate` (sinon le workflow CI échouera)
 
-### 2. Diagnostic Premature close (audit live, 2-3h)
-**Hypothèse principale** : le streaming SSE plante avec une erreur provider (401, 503, model invalide) non remontée correctement → connexion fermée → "Premature close" côté AnythingLLM/LibreChat.
+### 2. Diagnostic Premature close (DONE)
+4 causes identifiées dans pipeline streaming :
+- `OpenAICompatibleProvider.stream()` ne garantit pas `data: [DONE]\n\n` final → client lève "Premature close" si le provider termine sans
+- `raise_for_status()` 401/503 → exception propage dans StreamingResponse → fermeture brutale
+- `httpx.RequestError` mid-stream → idem
+- `route_stream` n'a aucun failover si premier provider rate à l'ouverture
 
-Test à faire :
-- `docker compose logs --tail=50 backend` après tentative AnythingLLM
-- curl direct chaque provider en streaming, vérifier le format SSE :
-  - `data: {...}\n\n` chunks
-  - `data: [DONE]\n\n` final obligatoire
-- Identifier qui n'envoie pas `[DONE]` ou format non conforme
-- Reproduire localement : `CEREBRAS_API_KEY=invalid` + curl streaming → observer
+### 3. Fix Premature close (DONE — commit `e480e17`)
+`services/router.py::_safe_stream(provider_name, inner)` wrapper qui :
+- Garantit `data: [DONE]\n\n` final TOUJOURS (ajoute si manquant, dedup si déjà émis)
+- Convertit `ProviderError` + exception générique en error chunks OpenAI-style sur le fil (200 OK propre)
+- Plus jamais de fermeture brutale → "Premature close" éliminé pour les 3 premières causes
+- TDD : 5 tests rouges → verts (omission, dedup, erreur à l'ouverture, erreur mid-stream, exception inattendue)
+- Failover-on-stream-open intentionnellement reporté (requires header sequencing rework)
 
-Voir `services/router.py::_safe_stream` et chaque `providers/*.py::stream()`.
+---
 
-### 3. Credential pools (3-4h)
+## Première action prochaine session — Phase A jour 2 : credential pools
+
+### 1. Credential pools (3-4h)
 - Étudier patterns `piyush-tyagi-13/llm-keypool` et `NousResearch/hermes-agent`
 - Schema `.env` étendu : `GROQ_API_KEYS=key1,key2,key3` (multi-keys)
 - Service `CredentialPool` : rotation `fill_first`, cooldown 24h sur 402, thread-safe
@@ -169,6 +177,14 @@ Auto-détection Ollama au démarrage (`GET http://localhost:11434/api/tags`), af
 ---
 
 ## Historique sessions précédentes
+
+### Session 2026-05-10 (suite) — Phase A jour 1
+- Tag git de backup `freeiaforge-pre-rebrand-2026-05-10` sur `53fb54a`
+- Rebrand strings + alias TDD : commits `18c320e` (sub-repo) + `c05f7dd` (monorepo CI)
+- Diagnostic Premature close : 4 causes identifiées dans pipeline streaming
+- Fix Premature close : `_safe_stream` wrapper + intégration `route_stream` (commit `e480e17`)
+- Décision conservatrice : pas de rename filesystem, double-publication Docker Hub (legacy + nouveau)
+- Tests : 158 → 165 verts (TDD strict, RED→GREEN sur tous les nouveaux comportements)
 
 ### Session 2026-05-10 — recadrage produit + recherche repos
 - Direction produit recadrée : pas de business / verticales, focus produit gateway parfait
