@@ -149,24 +149,79 @@ Multi-user, cloud sync, marketplace skills, verticales métier, business / moné
 
 ## Première action prochaine session — Phase B : clés payantes + budget
 
-### 1. Clés payantes (OpenAI, Anthropic, DeepSeek)
-- Étendre `.env` : `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`
-- 3 nouveaux providers, intégrés dans le pool
-- Gardés à priorité basse par défaut (free-tier first)
+### Décisions produit verrouillées (2026-05-10 fin de session)
 
-### 2. Modes de routing
-- Header `X-Mode` : `cheap` (free-tier seul), `quality` (force OpenAI/Anthropic), `auto` (cascade complète)
-- Mode `cheap` est le défaut, garantit "$0 tant que free-tier disponible"
+**1. Provider order**
+- L'user choisit l'ordre à l'installation ET peut le modifier plus tard
+- Aujourd'hui via `PROVIDER_ORDER=cerebras,groq,openai,...` env var (déjà supporté)
+- Wizard d'install + UI drag-drop = Phase G (frontend), pas Phase B
+- Priorités défauts pour les paid : `openai=10`, `anthropic=11`, `deepseek=12` (après free-tier mais re-orderables)
 
-### 3. Budget cap quotidien
-- Setting `DAILY_BUDGET_USD=5.0` (défaut)
-- Tracker depenses cumulées via tokens × pricing dans la DB
-- Si dépassement : forcer `cheap` (skip clés payantes le reste de la journée)
-- Reset à minuit UTC
+**2. Budget atteint → signaler + proposer**
+- Pas de fallback silencieux, pas de 503 brutal
+- Réponse HTTP 402 (non-streaming) avec body JSON :
+  ```json
+  {"error": {
+    "type": "daily_budget_exceeded",
+    "spent_usd": 5.02,
+    "cap_usd": 5.00,
+    "options": [
+      "Increase DAILY_BUDGET_USD in .env",
+      "Wait until 00:00 UTC (resets daily)",
+      "Send X-Mode=cheap to use free-tier only"
+    ]
+  }}
+  ```
+- Pour streaming : error chunk OpenAI-style + `[DONE]` (le wrapper `_safe_stream` gère déjà ce pattern)
 
-### 4. Provider order user UI (drag-drop)
-- Pour Phase G plus tard (frontend), pas Phase B
-- Phase B garde juste l'ordre via `PROVIDER_ORDER` env var (déjà fait)
+**3. Pricing**
+- À reconsidérer plus tard. Démarrer avec dict hardcoded `_PROVIDER_PRICING` dans `services/budget_tracker.py` (USD per 1M tokens input/output)
+- Refactor en `pricing.json` externe quand nécessaire
+
+**4. Reset budget**
+- À reconsidérer plus tard. Démarrer minuit **UTC** (cohérent avec `services/quota.py`)
+
+### Plan Phase B
+
+#### 1. Provider OpenAI (TDD, 30min)
+- `providers/openai.py` extends `OpenAICompatibleProvider`
+- `name="openai"`, `priority=10`, `base_url="https://api.openai.com/v1"`, `default_model="gpt-4o-mini"`
+- Tests : default_model resolution, validate_key probe (déjà géré par OpenAICompatibleProvider)
+
+#### 2. Provider DeepSeek (TDD, 20min)
+- `providers/deepseek.py` extends `OpenAICompatibleProvider`
+- `name="deepseek"`, `priority=12`, `base_url="https://api.deepseek.com/v1"`, `default_model="deepseek-chat"`
+
+#### 3. Provider Anthropic (TDD, 1-2h)
+- `providers/anthropic_provider.py` (NB: pas `anthropic.py` pour éviter shadow du SDK officiel)
+- Format Messages API propriétaire : `messages` + system séparé, `x-api-key` au lieu de Bearer, `anthropic-version` header obligatoire
+- `name="anthropic"`, `priority=11`, `base_url="https://api.anthropic.com/v1"`, `default_model="claude-haiku-4-5-20251001"`
+- Override `complete()`, `stream()`, `validate_key()` car format diverge d'OpenAI
+- Note : on a déjà `routes/anthropic.py` qui expose un endpoint Anthropic-compat sortant — c'est l'INVERSE (notre code consomme l'API d'Anthropic pour servir les requêtes user). Ne pas confondre.
+
+#### 4. BudgetTracker (TDD, 1-2h)
+- `services/budget_tracker.py`
+- Schema : `daily_budget(date TEXT, provider TEXT, model TEXT, input_tokens INT, output_tokens INT, usd_spent REAL, PRIMARY KEY(date, provider, model))`
+- API : `record_usage(provider, model, input_tok, output_tok)`, `get_today_total_usd()`, `is_over_budget()`, `reset_if_new_day()`
+- Pricing dict hardcoded au top du module
+- Hook : appel dans `ProviderRouter.route` après `result.tokens_used` connu
+
+#### 5. Header X-Mode + filtre routing (TDD, 1h)
+- `ChatRequest.mode: Literal["cheap", "quality", "auto"] = "cheap"` (default)
+- Header `X-Mode` mappé sur `request.mode` côté `routes/chat.py` avant dispatch
+- Dans `ProviderRouter.route`/`route_stream` : filtre la liste de providers selon mode
+  - `cheap` : skip si priority >= 10 (paid)
+  - `quality` : skip si priority < 10 (paid only)
+  - `auto` : tout
+- Si budget over et mode != cheap → forcer skip paid + ajouter warning header `X-Budget-Exceeded: true`
+
+#### 6. Wire main.py + .env.example + commit + tag (30min)
+- main.py instancie OpenAIProvider, AnthropicProvider, DeepSeekProvider
+- `_parse_keys` sur `OPENAI_API_KEY(S)`, `ANTHROPIC_API_KEY(S)`, `DEEPSEEK_API_KEY(S)`
+- `BudgetTracker(db=db, daily_cap_usd=settings.daily_budget_usd)`, passé au router
+- `.env.example` ajoute les 3 paid keys + `DAILY_BUDGET_USD=5.0`
+- Bump `version="0.7.0"` dans main.py FastAPI
+- Tag `freeaigate-v0.7.0`
 
 **Fin Phase B : tag `freeaigate-v0.7.0`**
 
