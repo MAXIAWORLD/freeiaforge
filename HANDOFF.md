@@ -1,11 +1,11 @@
 # HANDOFF — freeaigate (ex-FreeIA Gateway / freeiaforge)
 
-**Date dernière session :** 2026-05-10 (suite — Phase A jour 1 livré)
-**État :** v0.5.0 + Phase A jour 1 livré (rebrand strings + Premature close fix). Reste Phase A : credential pools, circuit breaker SQLite persisté, validation clés boot + logs JSON.
+**Date dernière session :** 2026-05-10 (Phase A jours 1 + 2 livrés)
+**État :** v0.5.0 + Phase A 50% (rebrand + Premature close fix + credential pool complet). Reste Phase A : circuit breaker SQLite persistance, validation clés boot + logs JSON.
 **Branche :** master
 **Repo :** `freeiaforge` (path filesystem inchangé, repo GitHub idem ; rebrand interne fait dans strings + image Docker)
 **Tag backup :** `freeiaforge-pre-rebrand-2026-05-10` sur HEAD `53fb54a`
-**Tests :** 165 verts (158 baseline + 2 alias TDD + 5 _safe_stream TDD)
+**Tests :** 192 verts (158 baseline + 2 alias + 5 _safe_stream + 27 credential pool)
 
 ---
 
@@ -94,20 +94,27 @@ Multi-user, cloud sync, marketplace skills, verticales métier, business / moné
 
 ---
 
-## Première action prochaine session — Phase A jour 2 : credential pools
+## Phase A jour 2 — LIVRÉ 2026-05-10
 
-### 1. Credential pools (3-4h)
-- Étudier patterns `piyush-tyagi-13/llm-keypool` et `NousResearch/hermes-agent`
-- Schema `.env` étendu : `GROQ_API_KEYS=key1,key2,key3` (multi-keys)
-- Service `CredentialPool` : rotation `fill_first`, cooldown 24h sur 402, thread-safe
-- Persister état pool dans SQLite
+### Credential pools (DONE — commits `0fde0d3` pool service + `7d20b2f` SQLite persistence)
+- `services/credential_pool.py` : multi-key per provider, fill_first selection, 24h cooldown
+- Triggers cooldown sur 401/402/429 ; 500/503/network errors ne touchent pas la clé (territoire circuit breaker du router)
+- ProviderRouter accepte `credential_pool=` optionnel ; backward-compat via api_keys dict
+- main.py parse `XXX_API_KEYS=k1,k2,k3` (pluriel) ou fallback `XXX_API_KEY` (single)
+- SQLite : table `credential_pool_state(provider, key_hash, cooldown_until, fail_count)` ; SHA-256 hash, jamais la clé en clair
+- TDD : 27 tests (18 unit + 2 router integration + 7 persistence)
 
-### 4. Persister circuit breaker SQLite (1-2h)
-Aujourd'hui `_error_state` en RAM → reset au moindre restart. Table `circuit_state(provider, consecutive_errors, open_until, last_error)`.
+---
 
-### 5. Validation clés au démarrage + logs JSON (2-3h)
-- Ping endpoint léger par provider au boot, log valides/invalides
+## Première action prochaine session — Phase A jour 3 : circuit breaker SQLite
+
+### 1. Persister circuit breaker SQLite (1-2h)
+Aujourd'hui `_error_state` (RAM) reset au moindre restart. Table `circuit_state(provider, consecutive_errors, last_error, last_used_at)` ; PK `provider`. Hooks dans `_on_success` et `_on_error`. Restore au boot.
+
+### 2. Validation clés au démarrage + logs JSON (2-3h)
+- Ping endpoint léger par provider au boot via `discover_default_model` étendu, log valides/invalides
 - Logs JSON via `python-json-logger` + `RotatingFileHandler` 10×10 MB
+- Au boot : `freeaigate ready — N/M cloud providers active` doit lister les clés invalidées en plus
 
 **Fin Phase A : tag `freeaigate-v0.6.0`**
 
@@ -178,13 +185,20 @@ Auto-détection Ollama au démarrage (`GET http://localhost:11434/api/tags`), af
 
 ## Historique sessions précédentes
 
-### Session 2026-05-10 (suite) — Phase A jour 1
+### Session 2026-05-10 (suite) — Phase A jours 1 + 2
+**Jour 1** :
 - Tag git de backup `freeiaforge-pre-rebrand-2026-05-10` sur `53fb54a`
 - Rebrand strings + alias TDD : commits `18c320e` (sub-repo) + `c05f7dd` (monorepo CI)
 - Diagnostic Premature close : 4 causes identifiées dans pipeline streaming
 - Fix Premature close : `_safe_stream` wrapper + intégration `route_stream` (commit `e480e17`)
 - Décision conservatrice : pas de rename filesystem, double-publication Docker Hub (legacy + nouveau)
 - Tests : 158 → 165 verts (TDD strict, RED→GREEN sur tous les nouveaux comportements)
+
+**Jour 2** :
+- Pool credentials service + wire router + persistence SQLite : commits `0fde0d3` + `7d20b2f`
+- Multi-key support via `XXX_API_KEYS=k1,k2,k3` env vars, backward-compat sur single keys
+- Cooldown 24h sur 401/402/429 ; SHA-256 hash en DB jamais la clé en clair
+- Tests : 165 → 192 verts (+27 dont 7 sur la persistence)
 
 ### Session 2026-05-10 — recadrage produit + recherche repos
 - Direction produit recadrée : pas de business / verticales, focus produit gateway parfait
