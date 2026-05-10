@@ -23,3 +23,13 @@ async def quota(tmp_path):
     service = QuotaService(db=db, limits=TEST_LIMITS)
     yield service
     await close_db(db)
+
+
+@pytest_asyncio.fixture
+async def pool_db(tmp_path):
+    """Fresh aiosqlite connection with credential_pool_state table created."""
+    db_path = str(tmp_path / "pool.db")
+    db = await aiosqlite.connect(db_path)
+    await init_db(db)
+    yield db
+    await close_db(db)

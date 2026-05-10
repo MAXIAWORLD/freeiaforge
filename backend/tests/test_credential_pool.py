@@ -285,6 +285,128 @@ async def test_router_dispatches_with_pool_supplied_key():
     assert captured["key"] == "pool-k1"
 
 
+# ---------------------------------------------------------------------------
+# SQLite persistence — survives across pool instances (i.e. restarts)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pool_with_db_persists_cooldown_on_402(pool_db):
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool(db=pool_db)
+    pool.add_keys("groq", ["k1"])
+    await pool.mark_failure("groq", "k1", 402)
+
+    async with pool_db.execute(
+        "SELECT provider, cooldown_until, fail_count FROM credential_pool_state"
+    ) as cursor:
+        rows = await cursor.fetchall()
+    assert len(rows) == 1
+    provider, cooldown_iso, fail_count = rows[0]
+    assert provider == "groq"
+    assert cooldown_iso is not None
+    assert fail_count == 1
+
+
+@pytest.mark.asyncio
+async def test_pool_with_db_persists_fail_count_increment(pool_db):
+    """Subsequent mark_failure calls must accumulate fail_count in the DB."""
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool(db=pool_db)
+    pool.add_keys("groq", ["k1"])
+    await pool.mark_failure("groq", "k1", 402)
+    await pool.mark_failure("groq", "k1", 402)
+    await pool.mark_failure("groq", "k1", 402)
+
+    async with pool_db.execute(
+        "SELECT fail_count FROM credential_pool_state WHERE provider='groq'"
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row[0] == 3
+
+
+@pytest.mark.asyncio
+async def test_pool_does_not_persist_503(pool_db):
+    """503 is provider-side, not key-side: no row should be written."""
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool(db=pool_db)
+    pool.add_keys("groq", ["k1"])
+    await pool.mark_failure("groq", "k1", 503)
+
+    async with pool_db.execute(
+        "SELECT COUNT(*) FROM credential_pool_state"
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_pool_restores_cooldown_from_db(pool_db):
+    """A new pool instance backed by the same DB must see cooldowns set
+    by an earlier instance — i.e. the cooldown survives a restart."""
+    from services.credential_pool import CredentialPool
+
+    pool_a = CredentialPool(db=pool_db)
+    pool_a.add_keys("groq", ["k1", "k2"])
+    await pool_a.mark_failure("groq", "k1", 402)
+
+    pool_b = CredentialPool(db=pool_db)
+    pool_b.add_keys("groq", ["k1", "k2"])
+    await pool_b.restore()
+    assert await pool_b.next_key("groq") == "k2"
+
+
+@pytest.mark.asyncio
+async def test_pool_mark_success_clears_db_state(pool_db):
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool(db=pool_db)
+    pool.add_keys("groq", ["k1"])
+    await pool.mark_failure("groq", "k1", 402)
+    await pool.mark_success("groq", "k1")
+
+    async with pool_db.execute(
+        "SELECT COUNT(*) FROM credential_pool_state WHERE provider='groq'"
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_pool_without_db_remains_in_memory_only():
+    """Backward-compat: tests that don't pass a db must keep working."""
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool()  # no db
+    pool.add_keys("groq", ["k1", "k2"])
+    await pool.mark_failure("groq", "k1", 402)
+    assert await pool.next_key("groq") == "k2"
+    # restore() must be safe to call without a db
+    await pool.restore()
+
+
+@pytest.mark.asyncio
+async def test_pool_persisted_state_does_not_leak_keys(pool_db):
+    """The DB must store SHA-256 hashes, never the api_key in clear."""
+    from services.credential_pool import CredentialPool
+
+    pool = CredentialPool(db=pool_db)
+    secret = "sk-super-secret-12345"
+    pool.add_keys("groq", [secret])
+    await pool.mark_failure("groq", secret, 402)
+
+    async with pool_db.execute(
+        "SELECT key_hash FROM credential_pool_state"
+    ) as cursor:
+        rows = await cursor.fetchall()
+    assert all(secret not in row[0] for row in rows)
+    # Hash must look like a hex digest
+    assert all(len(row[0]) == 64 and all(c in "0123456789abcdef" for c in row[0]) for row in rows)
+
+
 @pytest.mark.asyncio
 async def test_router_marks_pool_cooldown_on_provider_error_402():
     """On ProviderError(402), the failing key must be put on cooldown so the

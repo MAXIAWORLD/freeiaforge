@@ -113,8 +113,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Multi-key credential pool: prefer XXX_API_KEYS=k1,k2,k3 when set, else
     # fall back to legacy XXX_API_KEY single-key form. Pool rotates and applies
-    # a 24h cooldown on 401/402/429 (key-level errors) per provider.
-    pool = CredentialPool()
+    # a 24h cooldown on 401/402/429 (key-level errors) per provider. State is
+    # persisted in SQLite so cooldowns survive restarts.
+    pool = CredentialPool(db=db)
     pool.add_keys(
         "cerebras", _parse_keys("CEREBRAS_API_KEYS", settings.cerebras_api_key)
     )
@@ -132,6 +133,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "openrouter", _parse_keys("OPENROUTER_API_KEYS", settings.openrouter_api_key)
     )
     pool.add_keys("ollama", ["local"])
+    await pool.restore()
     providers = [
         CerebrasProvider(),
         GroqProvider(),
