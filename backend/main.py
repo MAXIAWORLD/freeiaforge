@@ -37,8 +37,22 @@ from routes.chat import set_router
 from routes.health import router as health_router
 from routes.mcp import router as mcp_router
 from services.cache import SemanticCache
+from services.credential_pool import CredentialPool
 from services.quota import QuotaService
 from services.router import ProviderRouter
+
+
+def _parse_keys(env_plural: str, single_fallback: str) -> list[str]:
+    """Parse `XXX_API_KEYS=k1,k2,k3` if set, else fall back to single `XXX_API_KEY`.
+
+    Returns an empty list when nothing is configured. Whitespace and empty
+    entries are stripped so users can paste comma-separated keys without
+    fearing typos like `,,key1,, key2`.
+    """
+    raw = os.getenv(env_plural, "")
+    if raw:
+        return [k.strip() for k in raw.split(",") if k.strip()]
+    return [single_fallback] if single_fallback else []
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +110,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "openrouter": settings.openrouter_api_key,
         "ollama": "local",  # sentinel — Ollama needs no auth
     }
+
+    # Multi-key credential pool: prefer XXX_API_KEYS=k1,k2,k3 when set, else
+    # fall back to legacy XXX_API_KEY single-key form. Pool rotates and applies
+    # a 24h cooldown on 401/402/429 (key-level errors) per provider.
+    pool = CredentialPool()
+    pool.add_keys(
+        "cerebras", _parse_keys("CEREBRAS_API_KEYS", settings.cerebras_api_key)
+    )
+    pool.add_keys("groq", _parse_keys("GROQ_API_KEYS", settings.groq_api_key))
+    pool.add_keys(
+        "sambanova", _parse_keys("SAMBANOVA_API_KEYS", settings.sambanova_api_key)
+    )
+    pool.add_keys("gemini", _parse_keys("GEMINI_API_KEYS", settings.gemini_api_key))
+    pool.add_keys(
+        "huggingface",
+        _parse_keys("HUGGINGFACE_API_KEYS", settings.huggingface_api_key),
+    )
+    pool.add_keys("mistral", _parse_keys("MISTRAL_API_KEYS", settings.mistral_api_key))
+    pool.add_keys(
+        "openrouter", _parse_keys("OPENROUTER_API_KEYS", settings.openrouter_api_key)
+    )
+    pool.add_keys("ollama", ["local"])
     providers = [
         CerebrasProvider(),
         GroqProvider(),
@@ -125,6 +161,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         api_keys=api_keys,
         cache=cache,
         provider_order=provider_order,
+        credential_pool=pool,
     )
     set_router(router_instance)
 

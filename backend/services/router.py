@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from fastapi import HTTPException
 from core.models import ChatRequest, ProviderStatus
 from providers.base import Provider, ProviderResult, ProviderError
+from services.credential_pool import CredentialPool
 from services.quota import QuotaService
 
 if TYPE_CHECKING:
@@ -89,19 +90,34 @@ class ProviderRouter:
         self,
         providers: list[Provider],
         quota: QuotaService,
-        api_keys: dict[str, str],
+        api_keys: dict[str, str] | None = None,
         cache: SemanticCache | None = None,
         provider_order: list[str] | None = None,
+        credential_pool: CredentialPool | None = None,
     ) -> None:
         if provider_order:
             self._providers = self._apply_order(providers, provider_order)
         else:
             self._providers = sorted(providers, key=lambda p: p.priority)
         self._quota = quota
-        self._api_keys = api_keys
+        self._api_keys = api_keys or {}
         self._cache = cache
         # State d'erreur in-memory : {provider_name: {consecutive_errors, last_error, last_used_at}}
         self._error_state: dict[str, dict] = {}
+
+        # Build credential pool from api_keys if no explicit pool was provided.
+        # When an explicit pool is given, it overrides api_keys for key resolution
+        # but api_keys remains exposed for legacy /v1/models discovery.
+        if credential_pool is None:
+            credential_pool = CredentialPool()
+            for name, key in self._api_keys.items():
+                if key:
+                    credential_pool.add_keys(name, [key])
+        self._pool = credential_pool
+
+    async def _key_for(self, provider_name: str) -> str:
+        """Resolve the active API key for ``provider_name`` via the pool."""
+        return await self._pool.next_key(provider_name) or ""
 
     async def refresh_default_models(self) -> None:
         """Query each configured provider's /models endpoint and update its
@@ -220,9 +236,9 @@ class ProviderRouter:
 
         # Routing normal avec règles de skip
         for provider in self._providers:
-            key = self._api_keys.get(provider.name, "")
+            key = await self._key_for(provider.name)
             if not key:
-                logger.debug("Skipping %s: no API key configured", provider.name)
+                logger.debug("Skipping %s: no API key available", provider.name)
                 continue
             if not await self._quota.is_available(provider.name):
                 logger.info("Skipping %s: quota exhausted", provider.name)
@@ -235,6 +251,7 @@ class ProviderRouter:
                     provider.name, requests=1, tokens=result.tokens_used
                 )
                 self._on_success(provider.name)
+                await self._pool.mark_success(provider.name, key)
                 logger.info(
                     "Served by %s (%d tokens)", provider.name, result.tokens_used
                 )
@@ -250,6 +267,7 @@ class ProviderRouter:
                 return result
             except ProviderError as e:
                 self._on_error(provider.name, e)
+                await self._pool.mark_failure(provider.name, key, e.status_code)
                 logger.warning("Provider %s failed (%s), trying next", provider.name, e)
                 continue
 
@@ -259,7 +277,7 @@ class ProviderRouter:
         """Tente uniquement le provider ciblé par le model hint."""
         # Trouver le provider dans la liste
         target = next((p for p in self._providers if p.name == hint), None)
-        key = self._api_keys.get(hint, "")
+        key = await self._key_for(hint)
 
         if not key or target is None:
             raise HTTPException(
@@ -275,10 +293,12 @@ class ProviderRouter:
             result = await target.complete(request, key)
             await self._quota.record_usage(hint, requests=1, tokens=result.tokens_used)
             self._on_success(hint)
+            await self._pool.mark_success(hint, key)
             logger.info("Served by %s (hinted, %d tokens)", hint, result.tokens_used)
             return result
         except ProviderError as e:
             self._on_error(hint, e)
+            await self._pool.mark_failure(hint, key, e.status_code)
             raise HTTPException(
                 status_code=503,
                 detail=f"Provider '{hint}' failed: {e}",
@@ -296,7 +316,7 @@ class ProviderRouter:
 
         if hint in _KNOWN_PROVIDERS:
             target = next((p for p in self._providers if p.name == hint), None)
-            key = self._api_keys.get(hint, "")
+            key = await self._key_for(hint)
             if not key or target is None:
                 raise RuntimeError(
                     f"Provider '{hint}' not available: no API key configured"
@@ -305,10 +325,11 @@ class ProviderRouter:
                 raise RuntimeError(f"Provider '{hint}' not available: quota exhausted")
             await self._quota.record_usage(hint, requests=1, tokens=0)
             self._on_success(hint)
+            await self._pool.mark_success(hint, key)
             return hint, _safe_stream(hint, target.stream(request, key))
 
         for provider in self._providers:
-            key = self._api_keys.get(provider.name, "")
+            key = await self._key_for(provider.name)
             if not key:
                 continue
             if not await self._quota.is_available(provider.name):
@@ -317,6 +338,7 @@ class ProviderRouter:
                 continue
             await self._quota.record_usage(provider.name, requests=1, tokens=0)
             self._on_success(provider.name)
+            await self._pool.mark_success(provider.name, key)
             return provider.name, _safe_stream(
                 provider.name, provider.stream(request, key)
             )
