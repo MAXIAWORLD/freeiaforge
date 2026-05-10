@@ -20,6 +20,14 @@ async def init_db(db: aiosqlite.Connection) -> None:
             PRIMARY KEY (provider, key_hash)
         )
     """)
+    await db.execute("""
+        CREATE TABLE IF NOT EXISTS circuit_state (
+            provider TEXT PRIMARY KEY,
+            consecutive_errors INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            last_used_at TEXT
+        )
+    """)
     await db.commit()
 
 

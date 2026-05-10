@@ -164,7 +164,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         cache=cache,
         provider_order=provider_order,
         credential_pool=pool,
+        db=db,
     )
+    await router_instance.restore_circuit_state()
     set_router(router_instance)
 
     # Ollama sentinel "local" doesn't count as an external key

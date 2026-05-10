@@ -13,6 +13,7 @@ from services.credential_pool import CredentialPool
 from services.quota import QuotaService
 
 if TYPE_CHECKING:
+    import aiosqlite
     from services.cache import SemanticCache
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ class ProviderRouter:
         cache: SemanticCache | None = None,
         provider_order: list[str] | None = None,
         credential_pool: CredentialPool | None = None,
+        db: "aiosqlite.Connection | None" = None,
     ) -> None:
         if provider_order:
             self._providers = self._apply_order(providers, provider_order)
@@ -104,6 +106,7 @@ class ProviderRouter:
         self._cache = cache
         # State d'erreur in-memory : {provider_name: {consecutive_errors, last_error, last_used_at}}
         self._error_state: dict[str, dict] = {}
+        self._db = db
 
         # Build credential pool from api_keys if no explicit pool was provided.
         # When an explicit pool is given, it overrides api_keys for key resolution
@@ -118,6 +121,50 @@ class ProviderRouter:
     async def _key_for(self, provider_name: str) -> str:
         """Resolve the active API key for ``provider_name`` via the pool."""
         return await self._pool.next_key(provider_name) or ""
+
+    async def restore_circuit_state(self) -> None:
+        """Load persisted circuit_state rows into in-memory _error_state.
+
+        Safe to call without a db (no-op). Should run once at boot, after
+        the router is constructed, so providers' historical error counts
+        survive restarts.
+        """
+        if self._db is None:
+            return
+        async with self._db.execute(
+            "SELECT provider, consecutive_errors, last_error, last_used_at "
+            "FROM circuit_state"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        for provider, consecutive_errors, last_error, last_used_at in rows:
+            self._error_state[provider] = {
+                "consecutive_errors": consecutive_errors,
+                "last_error": last_error,
+                "last_used_at": last_used_at,
+            }
+
+    async def _persist_circuit_state(self, provider_name: str) -> None:
+        if self._db is None:
+            return
+        state = self._error_state.get(provider_name, {})
+        await self._db.execute(
+            """
+            INSERT INTO circuit_state
+                (provider, consecutive_errors, last_error, last_used_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(provider) DO UPDATE SET
+                consecutive_errors = excluded.consecutive_errors,
+                last_error = excluded.last_error,
+                last_used_at = excluded.last_used_at
+            """,
+            (
+                provider_name,
+                state.get("consecutive_errors", 0),
+                state.get("last_error"),
+                state.get("last_used_at"),
+            ),
+        )
+        await self._db.commit()
 
     async def refresh_default_models(self) -> None:
         """Query each configured provider's /models endpoint and update its
@@ -163,16 +210,19 @@ class ProviderRouter:
     def _now_iso(self) -> str:
         return datetime.now(tz=timezone.utc).isoformat()
 
-    def _on_success(self, provider_name: str) -> None:
+    async def _on_success(self, provider_name: str) -> None:
         state = self._error_state.setdefault(provider_name, {})
         state["consecutive_errors"] = 0
         state["last_used_at"] = self._now_iso()
+        state.setdefault("last_error", None)
+        await self._persist_circuit_state(provider_name)
 
-    def _on_error(self, provider_name: str, error: ProviderError) -> None:
+    async def _on_error(self, provider_name: str, error: ProviderError) -> None:
         state = self._error_state.setdefault(provider_name, {})
         state["consecutive_errors"] = state.get("consecutive_errors", 0) + 1
         state["last_error"] = str(error)
         state.setdefault("last_used_at", None)
+        await self._persist_circuit_state(provider_name)
 
     def _has_vision(self, request: ChatRequest) -> bool:
         """Détecte si l'un des messages contient une image (content multimodal)."""
@@ -250,7 +300,7 @@ class ProviderRouter:
                 await self._quota.record_usage(
                     provider.name, requests=1, tokens=result.tokens_used
                 )
-                self._on_success(provider.name)
+                await self._on_success(provider.name)
                 await self._pool.mark_success(provider.name, key)
                 logger.info(
                     "Served by %s (%d tokens)", provider.name, result.tokens_used
@@ -266,7 +316,7 @@ class ProviderRouter:
                     )
                 return result
             except ProviderError as e:
-                self._on_error(provider.name, e)
+                await self._on_error(provider.name, e)
                 await self._pool.mark_failure(provider.name, key, e.status_code)
                 logger.warning("Provider %s failed (%s), trying next", provider.name, e)
                 continue
@@ -292,12 +342,12 @@ class ProviderRouter:
         try:
             result = await target.complete(request, key)
             await self._quota.record_usage(hint, requests=1, tokens=result.tokens_used)
-            self._on_success(hint)
+            await self._on_success(hint)
             await self._pool.mark_success(hint, key)
             logger.info("Served by %s (hinted, %d tokens)", hint, result.tokens_used)
             return result
         except ProviderError as e:
-            self._on_error(hint, e)
+            await self._on_error(hint, e)
             await self._pool.mark_failure(hint, key, e.status_code)
             raise HTTPException(
                 status_code=503,
@@ -324,7 +374,7 @@ class ProviderRouter:
             if not await self._quota.is_available(hint):
                 raise RuntimeError(f"Provider '{hint}' not available: quota exhausted")
             await self._quota.record_usage(hint, requests=1, tokens=0)
-            self._on_success(hint)
+            await self._on_success(hint)
             await self._pool.mark_success(hint, key)
             return hint, _safe_stream(hint, target.stream(request, key))
 
@@ -337,7 +387,7 @@ class ProviderRouter:
             if self._should_skip(provider.name, request):
                 continue
             await self._quota.record_usage(provider.name, requests=1, tokens=0)
-            self._on_success(provider.name)
+            await self._on_success(provider.name)
             await self._pool.mark_success(provider.name, key)
             return provider.name, _safe_stream(
                 provider.name, provider.stream(request, key)
