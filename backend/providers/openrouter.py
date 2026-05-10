@@ -6,7 +6,7 @@ from core.models import ChatRequest, ChatResponse
 from providers.base import OpenAICompatibleProvider, ProviderError, ProviderResult
 
 _HTTP_REFERER = "https://maxiaworld.app"
-_X_TITLE = "FreeIA Gateway"
+_X_TITLE = "freeaigate"
 
 
 class OpenRouterProvider(OpenAICompatibleProvider):

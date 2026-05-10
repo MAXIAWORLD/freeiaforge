@@ -1,111 +1,229 @@
-# HANDOFF — FreeIA Gateway
+# HANDOFF — freeaigate (ex-FreeIA Gateway / freeiaforge)
 
-**Date :** 2026-05-08
-**État :** v0.5.0 + 5 fixes UX/install (post-test utilisateur réel)
-
----
-
-## Session 2026-05-08 — fixes installation après test sur PC vierge
-
-Test réel par un utilisateur non-tech sur un Windows clean → 5 bugs trouvés et corrigés.
-
-### Fixes livrés (5 commits, tous pushed master)
-
-| Commit | Fix |
-|---|---|
-| `7a1d7a6` | `start.ps1` + `start.sh` : auto-création de `backend/.env`. `docker-compose.yml` : `env_file required: false` (compose v2) |
-| `50f81c5` | `start.bat` ajouté — natif Windows, contourne ExecutionPolicy PowerShell |
-| `9e19bb8` | `.gitattributes` force LF sur `*.sh` + `Dockerfile`: `sed -i 's/\r$//' entrypoint.sh`. Fix le `entrypoint.sh: 2: set: Illegal option -` qui empêchait le conteneur de démarrer sur Windows |
-| `cea22fd` | Endpoint `GET /v1/models` ajouté (était 404, cause du "Premature close" dans AnythingLLM/LibreChat) |
-| `5594950` | `/v1/models` dynamique : retourne le `default_model` de chaque provider configuré (clé API présente) + alias `freeai-gateway` |
-
-### Landing publique (maxia-hub)
-
-- Encadré **Pré-requis** avec liens download Docker Desktop + Git
-- **Bouton "Télécharger le ZIP"** ajouté dans étape 1 (Git devient optionnel)
-- Étape 3 : `start.bat` (double-clic) au lieu de `docker compose up --build`
-- Section **Troubleshooting accordéon** : 5 erreurs courantes + solutions
-- 8 langues à jour (en/fr/es/de/ja/zh/pt/ko)
-- Déployé `https://maxiaworld.app/freeai.html`, backups VPS créés
-
-### Bug identifié (pas encore résolu)
-
-**Cause "Premature close" dans AnythingLLM = modèles hardcodés obsolètes côté provider.**
-
-Diagnostic confirmé par le user : les `default_model` codés en dur dans `providers/*.py` ne sont plus valides côté provider → l'API retourne une erreur → le stream est coupé → AnythingLLM voit "Premature close".
-
-Modèles suspects à auditer :
-- `cerebras.py` : `llama-3.3-70b`
-- `gemini.py` : `gemini-1.5-flash` (probablement déprécié → `gemini-2.0-flash` ou `2.5-flash`)
-- `openrouter.py` : `openrouter/free` (pas un model id valide)
-- `huggingface.py` : `meta-llama/Llama-3.1-70B-Instruct` (peut être gated)
-- `mistral.py` : `mistral-large-latest`
-- `groq.py` : `llama-3.3-70b-versatile`
-
-### ~~Priorité #1 prochaine session — auto-discovery des modèles~~ ✅ DONE
-
-**Commit `7a1c2db` — auto-discovery livré et pushed.**
-
-- `Provider.discover_default_model(api_key)` ajouté
-- Generic `OpenAICompatibleProvider` appelle `{base_url}/models`
-- Heuristics par provider (Cerebras / Groq / Mistral / OpenRouter / Gemini)
-- HuggingFace skipped (URL avec model dans le path, listing non standard)
-- `ProviderRouter.refresh_default_models()` parallélise via `asyncio.gather`
-- `main.py` : refresh au boot + toutes les 24h en background task
-- 18 tests TDD verts dans `test_model_discovery.py` (158 total dans la suite)
-- OpenRouter `default_model` corrigé : `openrouter/free` (invalide) → `meta-llama/llama-3.3-70b-instruct:free`
-
-Pour activer côté user : `git pull` + `docker compose up --build`. Au boot, les logs montrent `[provider] default_model: X → Y` pour chaque modèle déprécié remplacé.
-
-| Provider | Endpoint listing |
-|---|---|
-| Cerebras | `GET https://api.cerebras.ai/v1/models` |
-| Groq | `GET https://api.groq.com/openai/v1/models` |
-| Sambanova | `GET https://api.sambanova.ai/v1/models` |
-| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models` |
-| Mistral | `GET https://api.mistral.ai/v1/models` |
-| OpenRouter | `GET https://openrouter.ai/api/v1/models` |
-| HuggingFace | API listing (specifique) |
-
-Plan suggéré :
-1. Ajouter méthode `Provider.discover_models(api_key) -> list[str]` (interface).
-2. Implémenter `OpenAICompatibleProvider.discover_models()` (générique pour Cerebras/Groq/Sambanova/Mistral/OpenRouter — appellent tous `/v1/models`).
-3. Implémentations spécifiques pour Gemini + HuggingFace.
-4. Au startup de `ProviderRouter`, appeler `discover_models()` en parallèle (asyncio.gather), choisir le "meilleur" modèle (heuristique: plus gros / le plus récent), assigner à `default_model`.
-5. Cron 24h via asyncio task pour rafraîchir.
-6. Fallback : si discovery fail, garder le hardcode actuel.
-7. Tests : mock chaque endpoint, vérifier sélection.
-
-Ce fix résout aussi : nouveaux modèles annoncés = plus besoin de release manuelle, FreeIA s'adapte tout seul.
+**Date dernière session :** 2026-05-10
+**État :** v0.5.0 + 6 fixes UX + auto-discovery modèles, **direction produit recadrée**, plan v1.0 verrouillé
+**Branche :** master
+**Repo :** `freeiaforge` (rename interne en `freeaigate` à faire Phase A)
 
 ---
 
-## État v0.5.0 (commit `af11efe` du 2026-05-07)
+## ⚠️ LIRE EN PREMIER PROCHAINE SESSION
 
-- 8 providers : Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → Ollama
-- Endpoints : `/v1/chat/completions` (OpenAI), `/v1/messages` (Anthropic), `/v1/models`, `/v1/providers`, `/health`, `/mcp/*`
+1. Lire `~/.claude/projects/C--Users-Mini-pc-Desktop-MAXIA-Lab/memory/project_freeaigate_plan_final.md` — **plan v1.0 source de vérité**
+2. Lire ce HANDOFF
+3. Démarrer Phase A jour 1 (rename + diagnostic Premature close)
+
+---
+
+## Direction produit — verrouillé 2026-05-10
+
+### Décisions stratégiques
+- **Nom produit** : `freeaigate` (binaire `freeaigate-installer.exe`)
+- **Repo** : on reste dans `freeiaforge` actuel (rename interne, pas extraction nouveau repo)
+- **Cible** : produit gateway IA grand public single-user, **pas business**, **pas verticales métier** (DesignForge/DecoForge etc. = post-v1.0 si traction)
+- **Objectif unique** : produit qui marche parfaitement, s'installe en 3 min, gère mémoire + files + voix + web grounding, fonctionne sans Ollama
+
+### Fonctionnalités v1.0
+- Cascade providers gratuits (Cerebras/Groq/Sambanova/Gemini/HF/Mistral/OpenRouter/Ollama)
+- Clés API payantes optionnelles (OpenAI/Anthropic/DeepSeek)
+- Mémoire long-terme persistante cross-session
+- Files in : drag-drop fichier ET dossier (PDF/Word/Excel/image/code/zip)
+- Files out : génération .docx/.pdf/.pptx/.xlsx/.md/image
+- Web grounding anti-hallucination (vérification + citations)
+- Voix in (Groq Whisper / faster-whisper local) + voix out (Piper local)
+- Auto-switch image multilingue (10 langues : FR/EN/ES/DE/IT/PT/RU/ZH/JA/AR)
+- Provider order configurable user (drag-drop UI)
+- Optimisation tokens : −25% sans Ollama, −40% avec Ollama
+- Installation 1-click Tauri Win/Mac/Linux (~800 MB total)
+- Frontend chat = LibreChat bundlé rebrandé `freeaigate` (MIT)
+
+### Garanties non-négociables
+- Marche **sans Ollama installé** (cascade free-tier prend le relais via `LightModelService`)
+- Marche **sans aucune clé payante**
+- Marche **100% offline** sur voix (Piper + faster-whisper bundle installer)
+- Marche après simple double-clic installer, zéro setup tiers
+
+### Hors scope v1.0
+Multi-user, cloud sync, marketplace skills, verticales métier, business / monétisation.
+
+---
+
+## Plan 6 phases × 1 semaine = 6 semaines
+
+| # | Phase | Livrable | Repo plug-and-play |
+|---|---|---|---|
+| A | Stabilité + rebrand `freeaigate` (fix Premature close, circuit breaker SQLite, credential pools, validation clés, logs JSON) | v0.6.0 | piyush-tyagi-13/llm-keypool, NousResearch/hermes-agent (patterns) |
+| B | Clés payantes (OpenAI/Anthropic/DeepSeek) + modes routing + ordre user + budget cap $5/jour | v0.7.0 | – |
+| C | Mémoire long-terme (plug **Mem0**) | v0.8.0 | mem0ai/mem0 |
+| D | Auto-switch image multilingue 10 langues (classifier embedding fastembed) | v0.9.0 | qdrant/fastembed (déjà en place) |
+| E | Files in/out (plug **MinerU** + weasyprint + python-docx/pptx/openpyxl) | v0.10.0 | opendatalab/MinerU |
+| F | Web grounding (plug **AgentSearch self-host SearXNG**) | v0.11.0 | brcrusoe72/agent-search |
+| G | Voix in/out (Groq Whisper + **faster-whisper** + Piper) + Bundle **LibreChat** rebrandé + Installer Tauri + Dashboard | v0.12.0 | SYSTRAN/faster-whisper, LibreChat |
+| H | Optimisation tokens (plug **GPTCache**, mode concise, délégation Ollama, dashboard stats) | **v1.0.0** | zilliztech/GPTCache |
+
+**Délai initial 8 semaines → 6 semaines** grâce au plug-and-play des 5 repos clés (Mem0, MinerU, AgentSearch, GPTCache, faster-whisper).
+
+---
+
+## Première action prochaine session — Phase A jour 1
+
+### 1. Rename `freeiaforge` → `freeaigate` (1-2h)
+- Code Python : tous les imports, tous les `freeiaforge`/`FreeIA Gateway` partout
+- `pyproject.toml`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`
+- `README.md` FR + EN, landing pages, scripts `start.bat/.ps1/.sh`
+- Image Docker : `maxiaworld/freeiaforge` → `maxiaworld/freeaigate` (re-publish)
+- Service docker-compose, port reste 8002
+- Commit `feat(rebrand): freeiaforge → freeaigate`
+
+### 2. Diagnostic Premature close (audit live, 2-3h)
+**Hypothèse principale** : le streaming SSE plante avec une erreur provider (401, 503, model invalide) non remontée correctement → connexion fermée → "Premature close" côté AnythingLLM/LibreChat.
+
+Test à faire :
+- `docker compose logs --tail=50 backend` après tentative AnythingLLM
+- curl direct chaque provider en streaming, vérifier le format SSE :
+  - `data: {...}\n\n` chunks
+  - `data: [DONE]\n\n` final obligatoire
+- Identifier qui n'envoie pas `[DONE]` ou format non conforme
+- Reproduire localement : `CEREBRAS_API_KEY=invalid` + curl streaming → observer
+
+Voir `services/router.py::_safe_stream` et chaque `providers/*.py::stream()`.
+
+### 3. Credential pools (3-4h)
+- Étudier patterns `piyush-tyagi-13/llm-keypool` et `NousResearch/hermes-agent`
+- Schema `.env` étendu : `GROQ_API_KEYS=key1,key2,key3` (multi-keys)
+- Service `CredentialPool` : rotation `fill_first`, cooldown 24h sur 402, thread-safe
+- Persister état pool dans SQLite
+
+### 4. Persister circuit breaker SQLite (1-2h)
+Aujourd'hui `_error_state` en RAM → reset au moindre restart. Table `circuit_state(provider, consecutive_errors, open_until, last_error)`.
+
+### 5. Validation clés au démarrage + logs JSON (2-3h)
+- Ping endpoint léger par provider au boot, log valides/invalides
+- Logs JSON via `python-json-logger` + `RotatingFileHandler` 10×10 MB
+
+**Fin Phase A : tag `freeaigate-v0.6.0`**
+
+---
+
+## Top 10 repos open source à utiliser
+
+1. **mem0ai/mem0** — mémoire long-terme (Phase C)
+2. **opendatalab/MinerU** — file parsing PDF/DOCX/XLSX/PPTX/images (Phase E)
+3. **brcrusoe72/agent-search** — web grounding self-host SearXNG bundlé (Phase F)
+4. **piyush-tyagi-13/llm-keypool** — credential pools (Phase A)
+5. **zilliztech/GPTCache** — semantic cache 30-68% économies (Phase H)
+6. **SYSTRAN/faster-whisper** — STT 4× plus rapide que whisper.cpp (Phase G)
+7. **LibreChat** — frontend chat MIT (Phase G)
+8. **BerriAI/litellm** — patterns gateway référence
+9. **Locally Uncensored** Tauri+Ollama+ComfyUI single .exe — modèle installer (Phase G)
+10. **NousResearch/hermes-agent** — patterns credential pools mature (Phase A)
+
+---
+
+## Décisions techniques verrouillées
+
+- **TTS** : Piper local par défaut (gratuit ~50 MB, 30+ langues), ElevenLabs/OpenAI option payante
+- **STT** : Groq Whisper cloud par défaut (gratuit 5h/jour), **faster-whisper** local bundle installer (4× whisper.cpp)
+- **Web grounding** : auto sur claims factuels + slash `/no-web`, cascade AgentSearch self-host → Tavily → Brave → DuckDuckGo
+- **PDF** : weasyprint, **OCR** : Tesseract local bundle (~150 MB) + MinerU dual VLM+OCR
+- **Outputs** : `data/outputs/{conversation_id}/`
+- **Embedding multilingue** : fastembed `paraphrase-multilingual-MiniLM-L12-v2` (en place), upgrade vers EmbeddingGemma-300M si besoin Phase D
+- **Memory** : Mem0 (91.6 LoCoMo benchmark) au lieu de coder from scratch
+- **File parsing** : MinerU (109 langues OCR auto) au lieu de pypdf+python-docx custom
+- **Cache sémantique** : GPTCache (30-68% économies prouvées) au lieu de cache custom
+- **Frontend chat** : LibreChat MIT bundlé rebrandé total (theme/logo/fonts freeaigate, page About préserve mention discrète)
+- **Installer Tauri ~800 MB** : Tesseract + Piper + faster-whisper + fastembed multilingue + backend embedded + LibreChat bundle
+- **Ollama = OPTIONNEL** : auto-détecté via `LightModelService`. Sans Ollama → Cerebras prend le relais, économie tokens passe de −40% à −25%
+
+---
+
+## Architecture LightModelService (pour optimisation tokens)
+
+Couche d'abstraction unique pour les tâches mécaniques internes (extract memory, classif, résumé, dedup, parse, intent fallback) :
+
+- **Niveau 1 OPTIMAL** : Ollama local (`qwen3:1.7b`) si détecté → 0 tok API
+- **Niveau 2 DÉGRADÉ** : Cerebras free-tier (1s, 5000 req/jour de marge) → consomme quota free
+- **Niveau 3 EXTRA DÉGRADÉ** : Haiku 4.5 / GPT-5-nano si payant activé → cents
+- **Niveau 4** : optimisation désactivée, mode naïf, message clair user
+
+Auto-détection Ollama au démarrage (`GET http://localhost:11434/api/tags`), affichée dashboard.
+
+---
+
+## 13 leviers optimisation tokens (Phase H)
+
+1. System prompt 800 tok max + Anthropic prompt caching
+2. Memory injection cappée 800 tok hard
+3. History compaction via `LightModelService` tous les 20 messages
+4. RAG chunks 512 tok, top-K 5
+5. Compression docs uploadés via `LightModelService` avant indexation
+6. Code stripping (commentaires, whitespace, locks)
+7. Mode `concise` par défaut header `X-Mode`
+8. Stop-sequences agressives
+9. `max_tokens` dynamique selon intent
+10. Routing par taille prompt (Cerebras < 500, Groq/Samba 500-10k, Gemini/Claude 10k+)
+11. Cache sémantique GPTCache + pre-warm 50 prompts startup
+12. Dédup batch idempotency key (refresh UI = 1 seul appel)
+13. Délégation `LightModelService` pour 6 tâches mécaniques
+
+---
+
+## Historique sessions précédentes
+
+### Session 2026-05-10 — recadrage produit + recherche repos
+- Direction produit recadrée : pas de business / verticales, focus produit gateway parfait
+- Plan v1.0 verrouillé : 6 phases × 1 sem = 6 semaines
+- Recherche web 16 queries → identification 50+ repos open source pertinents
+- Top 10 repos plug-and-play retenus → délai 8 sem → 6 sem
+- LightModelService pattern défini (Ollama optionnel)
+- Décision frontend : LibreChat MIT bundle rebrandé (vs from-scratch 6 mois ou Open WebUI license ambiguë)
+- Sauvegarde mémoire : `project_freeaigate_plan_final.md`
+
+### Session 2026-05-09 — audit MemPalace vs agentmemory (déprécié par décision Mem0)
+- `backend/services/memory.py` (MemPalace v0.1.0) **non branché** dans gateway
+- Évaluation alternative agentmemory (rohitg00) — REST 107 endpoints, multi-user namespacé
+- **Verdict 2026-05-10** : remplacé par **Mem0** (mem0ai/mem0) qui benchmark mieux (91.6 LoCoMo)
+- Action : supprimer `services/memory.py` (MemPalace dormant) + `tests/test_memory.py` en début Phase C
+
+### Session 2026-05-08 — 5 fixes installation PC vierge
+- 5 commits pushed master (auto-création .env, start.bat Windows, LF entrypoint.sh, /v1/models endpoint, models dynamique)
+- Landing publique freeai.html déployée maxiaworld.app, 8 langues
+- Bug "Premature close" identifié → cause = modèles hardcodés obsolètes côté provider
+- Fix `7a1c2db` auto-discovery modèles livré (refresh /models au boot + 24h)
+
+### v0.5.0 (commit `af11efe` 2026-05-07)
+- 8 providers : Cerebras → Groq → Sambanova → Gemini → HF → Mistral → OpenRouter → Ollama
+- Endpoints : `/v1/chat/completions`, `/v1/messages` (Anthropic), `/v1/models`, `/v1/providers`, `/health`, `/mcp/*`
 - Streaming SSE avec header `X-Provider`
-- Semantic cache SQLite (TTL 1h)
+- Semantic cache SQLite TTL 1h
 - Quota manager par provider (reset daily)
 - MCP server natif (3 tools)
-- Tests : 178+ verts (12 health route après ajout /v1/models)
-
-## Stack
-
-- Python 3.12 + FastAPI + httpx + Pydantic V2
-- SQLite (quotas + cache)
-- Docker Compose (port 8002)
-- Image publiée : `maxiaworld/freeiaforge:latest`
-
-## Repo public
-
-`https://github.com/MAXIAWORLD/freeiaforge` — MIT, 178 tests, prêt à être cloné.
+- 178+ tests verts
+- Stack : Python 3.12 + FastAPI + httpx + Pydantic V2 + SQLite + Docker Compose port 8002
+- Image : `maxiaworld/freeiaforge:latest` (rebrand → `maxiaworld/freeaigate:latest` Phase A)
+- Repo public : `https://github.com/MAXIAWORLD/freeiaforge` MIT
 
 ---
 
-## Notes pour la prochaine session
+## Checklist v1.0 ship-ready
 
-1. **Lire ce HANDOFF avant toute action** — le bug AnythingLLM "Premature close" est la priorité.
-2. **Demander les logs Docker au user** : `docker compose logs --tail=50 backend` après tentative AnythingLLM.
-3. **Hypothèse principale** : le streaming SSE plante avec une erreur provider (401 Cerebras ?) qui n'est pas correctement remontée → connexion fermée → "Premature close" côté client. Voir `routes/chat.py::chat_completions` et `services/router.py::route_stream`.
-4. **Reproduire localement** : lancer le backend avec `CEREBRAS_API_KEY=invalid`, faire une requête streaming → observer le comportement.
+- [ ] 1 installer Win/Mac/Linux, 0 terminal, < 3 min
+- [ ] User réorganise providers en drag-drop
+- [ ] Demande image n'importe quelle langue (FR/EN/ES/DE/IT/PT/RU/ZH/JA/AR) → bascule auto LLM image
+- [ ] Drag-drop fichier/dossier → comprend (MinerU)
+- [ ] Demande PDF/Word/Image/Excel/Slides → reçoit fichier
+- [ ] Question factuelle → vérifie web (AgentSearch), cite sources
+- [ ] 🎤 dicte → transcrit (Groq Whisper + faster-whisper offline)
+- [ ] Réponse lue à voix haute (Piper) si demandé multilingue
+- [ ] IA se souvient cross-session (Mem0)
+- [ ] Cascade transparente, jamais "indisponible"
+- [ ] Marche sans Ollama (LightModelService cascade)
+- [ ] Marche sans aucune clé payante
+- [ ] Marche 100% offline sur voix
+- [ ] Budget payant cappé
+- [ ] −25% tokens sans Ollama, −40% avec Ollama (mesuré golden suite 30 prompts)
+- [ ] Header `X-Tokens-Used` sur chaque réponse
+- [ ] Dashboard montre économie live vs ChatGPT direct
+- [ ] Branding freeaigate cohérent partout (frontend LibreChat rebrandé)
+- [ ] Légalement clean (MIT)
+- [ ] Désinstalle = 1 clic propre

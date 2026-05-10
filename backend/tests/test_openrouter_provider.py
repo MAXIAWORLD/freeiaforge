@@ -1,4 +1,4 @@
-"""Tests TDD pour OpenRouterProvider — Phase 2 FreeIA Gateway v0.2.0."""
+"""Tests TDD pour OpenRouterProvider — Phase 2 freeaigate v0.2.0."""
 
 from __future__ import annotations
 
@@ -137,7 +137,7 @@ class TestOpenRouterCustomHeaders:
             await provider.complete(_make_request(), api_key="test-key")
 
         assert "X-Title" in captured_headers
-        assert captured_headers["X-Title"] == "FreeIA Gateway"
+        assert captured_headers["X-Title"] == "freeaigate"
 
     @pytest.mark.asyncio
     async def test_authorization_header_still_present(self):

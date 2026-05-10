@@ -5,7 +5,7 @@ import httpx
 from providers.base import OpenAICompatibleProvider, ProviderError, ProviderResult
 from core.models import ChatRequest, ChatResponse
 
-_GATEWAY_ALIASES = frozenset({"auto", "freeai-gateway"})
+_GATEWAY_ALIASES = frozenset({"auto", "freeai-gateway", "freeaigate"})
 
 
 class SambanovaProvider(OpenAICompatibleProvider):
