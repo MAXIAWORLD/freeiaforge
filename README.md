@@ -1,4 +1,4 @@
-# freeaigate
+# FreeIA Gateway
 
 **7 free LLMs + local Ollama behind one OpenAI-compatible API. One-command Docker install.**
 
@@ -8,7 +8,7 @@
 
 ## What it does
 
-freeaigate aggregates 7 cloud LLM providers + local Ollama behind a single `/v1/chat/completions` endpoint. Automatic fallback, daily quota tracking, smart routing, semantic cache, and custom provider order.
+FreeIA Gateway aggregates 7 cloud LLM providers + local Ollama behind a single `/v1/chat/completions` endpoint. Automatic fallback, daily quota tracking, smart routing, semantic cache, and custom provider order.
 
 **Default priority chain:** Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → Ollama
 
@@ -51,14 +51,14 @@ docker compose up --build
 ### Docker Hub image
 
 ```bash
-docker pull maxiaworld/freeaigate:latest
+docker pull maxiaworld/freeiaforge:latest
 ```
 
 Use it in your own `docker-compose.yml`:
 ```yaml
 services:
-  freeaigate:
-    image: maxiaworld/freeaigate:latest
+  freeiaforge:
+    image: maxiaworld/freeiaforge:latest
     ports:
       - "8002:8002"
     env_file:
@@ -113,14 +113,14 @@ Settings → LLM Preference → Generic OpenAI
 ```
 Base URL : http://localhost:8002/v1
 API Key  : freeai
-Model    : freeaigate
+Model    : freeai-gateway
 ```
 
 ---
 
 ## Connect via Anthropic SDK
 
-freeaigate exposes an Anthropic-compatible endpoint at `POST /v1/messages`.  
+FreeIA Gateway exposes an Anthropic-compatible endpoint at `POST /v1/messages`.  
 Point any Anthropic SDK client at `http://localhost:8002` and it works out of the box.
 
 ```python
@@ -155,13 +155,13 @@ client.messages.create(model="ollama", ...)
 
 ## Connect via MCP (Claude Code, Cursor, Cline)
 
-freeaigate exposes a native MCP server — plug it directly into any MCP-compatible agent.
+FreeIA Gateway exposes a native MCP server — plug it directly into any MCP-compatible agent.
 
 **Claude Code** — add to `~/.claude/mcp_servers.json`:
 
 ```json
 {
-  "freeaigate": {
+  "freeai-gateway": {
     "type": "http",
     "url": "http://localhost:8002/mcp"
   }

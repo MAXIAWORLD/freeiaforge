@@ -164,21 +164,6 @@ async def test_models_returns_openai_compatible_list():
 
 
 @pytest.mark.asyncio
-async def test_models_includes_freeaigate_alias():
-    """GET /v1/models doit exposer 'freeaigate' (rebrand v0.6.0) en plus de 'freeai-gateway'."""
-    with patch(
-        "routes.health.get_router", return_value=make_mock_router_with_providers()
-    ):
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            r = await client.get("/v1/models")
-    ids = {m["id"] for m in r.json()["data"]}
-    assert "freeaigate" in ids
-    assert "freeai-gateway" in ids  # backward-compat
-
-
-@pytest.mark.asyncio
 async def test_models_includes_provider_models_when_keys_set():
     """GET /v1/models inclut les default_model des providers ayant une clé API."""
     with patch(

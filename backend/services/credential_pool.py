@@ -1,6 +1,6 @@
 """CredentialPool — multi-key rotation with 24h cooldown on key-level errors.
 
-Phase A jour 2 (freeaigate v0.6.0). State can either live purely in memory
+Phase A jour 2 (freeiaforge v0.6.0). State can either live purely in memory
 (unit-test friendly) or be persisted in SQLite via the optional ``db`` arg
 so cooldowns survive restarts.
 

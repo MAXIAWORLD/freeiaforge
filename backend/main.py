@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Ollama sentinel "local" doesn't count as an external key
     active = sum(1 for k, v in api_keys.items() if v and k != "ollama")
     logger.info(
-        "freeaigate ready — %d/%d cloud providers active",
+        "FreeIA Gateway ready — %d/%d cloud providers active",
         active,
         len(providers) - 1,
     )
@@ -209,7 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await close_db(db)
 
 
-app = FastAPI(title="freeaigate", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="FreeIA Gateway", version="0.6.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -1,4 +1,4 @@
-"""TDD — circuit_state SQLite persistence (Phase A jour 3, freeaigate v0.6.0)
+"""TDD — circuit_state SQLite persistence (Phase A jour 3, freeiaforge v0.6.0)
 
 The router's _error_state (consecutive_errors, last_error, last_used_at) used
 to live in RAM only and got wiped on every restart. We now persist it through

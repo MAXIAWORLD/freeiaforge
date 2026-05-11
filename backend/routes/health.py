@@ -37,20 +37,14 @@ async def models() -> dict:
 
     data: list[dict] = [
         {
-            "id": "freeaigate",
-            "object": "model",
-            "created": created,
-            "owned_by": "freeai",
-        },
-        {
             "id": "freeai-gateway",
             "object": "model",
             "created": created,
             "owned_by": "freeai",
-        },
+        }
     ]
 
-    seen_ids: set[str] = {"freeaigate", "freeai-gateway"}
+    seen_ids: set[str] = {"freeai-gateway"}
     for provider in providers:
         if provider.name == "ollama" or api_keys.get(provider.name):
             model_id = getattr(provider, "default_model", None)

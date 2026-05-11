@@ -1,4 +1,4 @@
-"""TDD — JSON logging configuration (Phase A jour 5, freeaigate v0.6.0)."""
+"""TDD — JSON logging configuration (Phase A jour 5, freeiaforge v0.6.0)."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def test_configure_logging_creates_log_file(tmp_path: Path):
     log_dir = tmp_path / "logs"
     configure_logging(log_dir=str(log_dir))
 
-    log = logging.getLogger("freeaigate.test")
+    log = logging.getLogger("freeiaforge.test")
     log.setLevel(logging.INFO)
     log.info("hello world")
 
@@ -100,7 +100,7 @@ def test_configure_logging_creates_log_file(tmp_path: Path):
     for h in logging.getLogger().handlers:
         h.flush()
 
-    log_file = log_dir / "freeaigate.log"
+    log_file = log_dir / "freeiaforge.log"
     assert log_file.exists()
     content = log_file.read_text(encoding="utf-8")
     assert "hello world" in content

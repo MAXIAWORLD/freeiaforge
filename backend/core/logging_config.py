@@ -1,4 +1,4 @@
-"""Structured logging configuration for freeaigate.
+"""Structured logging configuration for FreeIA Gateway.
 
 Provides:
 - ``JsonFormatter`` — emits each ``LogRecord`` as a single JSON object on a
@@ -6,7 +6,7 @@ Provides:
   caller attached. Easy to grep, easy to ship to log aggregators.
 - ``configure_logging(log_dir, level)`` — wires a human-readable stream
   handler on stdout (kept for ``docker compose logs`` UX) and a rotating
-  JSON file handler under ``{log_dir}/freeaigate.log`` (10×10 MB).
+  JSON file handler under ``{log_dir}/freeiaforge.log`` (10×10 MB).
 
 Design notes:
 - We deliberately don't take a runtime dependency on ``python-json-logger``;
@@ -25,10 +25,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-_DEFAULT_LOG_FILE = "freeaigate.log"
+_DEFAULT_LOG_FILE = "freeiaforge.log"
 _DEFAULT_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
 _DEFAULT_BACKUP_COUNT = 10  # ⇒ 10 × 10 MB = ~100 MB cap
-_HANDLER_TAG = "_freeaigate_managed"
+_HANDLER_TAG = "_freeiaforge_managed"
 
 _STANDARD_RECORD_KEYS: frozenset[str] = frozenset(
     {

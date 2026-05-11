@@ -1,4 +1,4 @@
-"""TDD — CredentialPool (Phase A jour 2 freeaigate v0.6.0)
+"""TDD — CredentialPool (Phase A jour 2 freeiaforge v0.6.0)
 
 Multi-key pool per provider with rotation + 24h cooldown on key-level errors.
 """

@@ -140,18 +140,6 @@ async def test_model_freeai_gateway_uses_default():
 
 
 @pytest.mark.asyncio
-async def test_model_freeaigate_alias_uses_default():
-    """model='freeaigate' (rebrand v0.6.0) → default_model. Backward-compat: 'freeai-gateway' kept."""
-    provider = SambanovaProvider()
-    FakeClient, captured = _capture_payload(DEFAULT_MODEL)
-
-    with patch("httpx.AsyncClient", FakeClient):
-        await provider.complete(_make_request("freeaigate"), FAKE_API_KEY)
-
-    assert captured["json"]["model"] == DEFAULT_MODEL
-
-
-@pytest.mark.asyncio
 async def test_unknown_model_uses_default():
     """Tout modèle non reconnu → default_model (70B)."""
     provider = SambanovaProvider()

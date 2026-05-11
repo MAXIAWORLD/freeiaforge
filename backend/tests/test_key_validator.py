@@ -1,4 +1,4 @@
-"""TDD — startup key validation (Phase A jour 4, freeaigate v0.6.0)
+"""TDD — startup key validation (Phase A jour 4, freeiaforge v0.6.0)
 
 After the pool is filled and circuit_state restored, each configured key is
 sanity-checked against the provider's /models endpoint. Keys returning

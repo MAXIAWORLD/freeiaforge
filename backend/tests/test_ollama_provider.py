@@ -1,4 +1,4 @@
-"""Tests TDD pour OllamaProvider — freeaigate v0.3.0."""
+"""Tests TDD pour OllamaProvider — FreeIA Gateway v0.3.0."""
 
 from __future__ import annotations
 

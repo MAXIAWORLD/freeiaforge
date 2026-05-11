@@ -1,4 +1,4 @@
-"""Tests TDD pour PROVIDER_ORDER — freeaigate v0.3.0."""
+"""Tests TDD pour PROVIDER_ORDER — FreeIA Gateway v0.3.0."""
 
 from __future__ import annotations
 
