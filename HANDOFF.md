@@ -1,12 +1,14 @@
-# HANDOFF — freeaigate (ex-FreeIA Gateway / freeiaforge)
+# HANDOFF — FreeIA Gateway (freeiaforge)
 
-**Date dernière session :** 2026-05-10 (Phase A complète, v0.6.0)
-**État :** Phase A 100% livrée. Prochaine étape : Phase B (clés payantes + modes routing + budget cap).
+> **⚠️ 2026-05-11 — REBRAND `freeaigate` ANNULÉ.** Décision Alexis : la landing publique https://maxiaworld.app/freeai.html n'a jamais été rebrandée et reste "FreeIA Gateway". Le rebrand interne (commit `18c320e` + chaînes ajoutées en v0.6.0) est revert (commit sub-repo `8772632`, monorepo `3805dab`). Le produit s'appelle **FreeIA Gateway** (affichage) / **freeiaforge** (repo, image Docker, log filename). L'alias OpenAI-compat unique reste **`freeai-gateway`**. Le bas de ce document mentionne encore `freeaigate` dans l'historique des sessions précédentes — c'est intentionnel pour préserver la trace.
+
+**Date dernière session :** 2026-05-11 (revert rebrand)
+**État :** Phase A 100% livrée + rebrand revert. Prochaine étape : Phase B (clés payantes + modes routing + budget cap) — décisions verrouillées plus bas.
 **Branche :** master
-**Repo :** `freeiaforge` (path filesystem inchangé, repo GitHub idem ; rebrand interne fait dans strings + image Docker)
-**Tag backup :** `freeiaforge-pre-rebrand-2026-05-10` sur HEAD `53fb54a`
-**Tag release :** `freeaigate-v0.6.0` (à pusher après ce HANDOFF)
-**Tests :** 210 verts (158 baseline + 2 alias + 5 _safe_stream + 27 credential pool + 5 circuit_state + 8 key_validator + 5 logging_config)
+**Repo :** `freeiaforge` (path filesystem, repo GitHub, image Docker, nom technique — tout aligné)
+**Tag backup :** `freeiaforge-pre-rebrand-2026-05-10` sur HEAD `53fb54a` (toujours valide)
+**Tag release :** v0.6.0 — à pusher pour publier `maxiaworld/freeiaforge:0.6.0` sur Docker Hub (workflow CI prêt, image Docker single-tag).
+**Tests :** 208 verts (210 − 2 tests TDD du rebrand supprimés avec l'alias `freeaigate` qu'ils enforçaient).
 
 ---
 
