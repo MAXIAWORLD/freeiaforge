@@ -18,7 +18,7 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     """
 
     name = "openrouter"
-    priority = 7
+    priority = 8
     base_url = "https://openrouter.ai/api/v1"
     default_model = "meta-llama/llama-3.3-70b-instruct:free"
 

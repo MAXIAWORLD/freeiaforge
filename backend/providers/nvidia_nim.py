@@ -5,7 +5,7 @@ from providers.base import OpenAICompatibleProvider
 
 class NvidiaProvider(OpenAICompatibleProvider):
     name = "nvidia_nim"
-    priority = 7
+    priority = 6
     base_url = "https://integrate.api.nvidia.com/v1"
     default_model = "meta/llama-3.3-70b-instruct"
 

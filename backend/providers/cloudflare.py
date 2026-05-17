@@ -5,7 +5,7 @@ from providers.base import OpenAICompatibleProvider
 
 class CloudflareProvider(OpenAICompatibleProvider):
     name = "cloudflare"
-    priority = 8
+    priority = 7
     default_model = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
     def __init__(self, account_id: str) -> None:

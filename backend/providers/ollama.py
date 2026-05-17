@@ -12,7 +12,7 @@ class OllamaProvider(OpenAICompatibleProvider):
     """
 
     name = "ollama"
-    priority = 9
+    priority = 10
 
     def __init__(
         self,
