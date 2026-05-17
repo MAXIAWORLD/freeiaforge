@@ -28,6 +28,17 @@ async def init_db(db: aiosqlite.Connection) -> None:
             last_used_at TEXT
         )
     """)
+    # Migration: add circuit_status + open_since columns (idempotent)
+    for col, typedef in [
+        ("circuit_status", "TEXT NOT NULL DEFAULT 'CLOSED'"),
+        ("open_since", "TEXT"),
+    ]:
+        try:
+            await db.execute(
+                f"ALTER TABLE circuit_state ADD COLUMN {col} {typedef}"
+            )
+        except Exception:
+            pass  # column already exists
     await db.commit()
 
 

@@ -1,6 +1,6 @@
 # FreeIA Gateway
 
-**7 free LLMs + local Ollama behind one OpenAI-compatible API. One-command Docker install.**
+**9 free LLMs + local Ollama behind one OpenAI-compatible API. One-command Docker install.**
 
 → **[freeai.html](https://maxiaworld.app/freeai.html)** — full guide & provider list
 
@@ -8,9 +8,9 @@
 
 ## What it does
 
-FreeIA Gateway aggregates 7 cloud LLM providers + local Ollama behind a single `/v1/chat/completions` endpoint. Automatic fallback, daily quota tracking, smart routing, semantic cache, and custom provider order.
+FreeIA Gateway aggregates 9 cloud LLM providers + local Ollama behind a single `/v1/chat/completions` endpoint. Automatic fallback, daily quota tracking, smart task-type routing, circuit breaker, semantic cache, and custom provider order.
 
-**Default priority chain:** Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → Ollama
+**Default priority chain:** Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → NVIDIA NIM → Cloudflare → Ollama
 
 If a provider hits its daily limit or returns an error, the next one takes over silently.
 
@@ -27,14 +27,17 @@ git clone https://github.com/MAXIAWORLD/freeiaforge
 cd freeiaforge
 ```
 
-Then run the launcher script that handles `.env` creation for you:
+Run the **setup wizard** to configure your API keys interactively, then launch:
 
-- **Windows:** double-click `start.bat` (or `.\start.bat` in any terminal)
+- **Windows:** `setup.bat` — lists all providers with signup links, asks for keys, detects Ollama, writes `.env`, then starts Docker
+- **Mac / Linux:** `./setup.sh` — same, POSIX-compatible
+
+Or use the simple launcher (no wizard, just starts Docker):
+
+- **Windows:** `start.bat` (or `.\start.ps1` in PowerShell)
 - **Mac / Linux:** `./start.sh`
 
-> Windows users can also use `.\start.ps1` from PowerShell, but `.bat` runs without any execution policy hassle.
-
-The script creates `backend/.env` from `.env.example` on first run, prompts you to paste at least one API key (Cerebras is the easiest — get a free key at https://cloud.cerebras.ai), then starts Docker. API runs at `http://localhost:8002`.
+API runs at `http://localhost:8002` after Docker starts.
 
 ### Manual install
 
@@ -80,13 +83,15 @@ volumes:
 
 | Provider | Limits | Sign up |
 |---|---|---|
-| Cerebras | 5,000 req/day · 1M tokens | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
-| Groq | 14,400 req/day · 500K tokens | [console.groq.com](https://console.groq.com) |
-| Sambanova | 1,000 req/day · 1M tokens | [cloud.sambanova.ai](https://cloud.sambanova.ai) |
-| Gemini | 1,500 req/day · 1M tokens | [aistudio.google.com](https://aistudio.google.com) |
-| HuggingFace | 1,000 req/day · 500K tokens | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
-| Mistral | 100 req/day · 200K tokens | [console.mistral.ai](https://console.mistral.ai) |
-| OpenRouter | 200 req/day · 33 free models | [openrouter.ai](https://openrouter.ai) |
+| Cerebras | 1M tokens/day · 30 RPM | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
+| Groq | 14,400 req/day · 30 RPM | [console.groq.com](https://console.groq.com) |
+| Sambanova | free tier permanent | [cloud.sambanova.ai](https://cloud.sambanova.ai) |
+| Gemini | 1,500 req/day · 1M ctx | [aistudio.google.com](https://aistudio.google.com) |
+| HuggingFace | 1,000 req/day | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) |
+| Mistral | 100 req/day | [console.mistral.ai](https://console.mistral.ai) |
+| OpenRouter | 30+ free models | [openrouter.ai](https://openrouter.ai) |
+| NVIDIA NIM | 40 RPM · 100+ models | [build.nvidia.com](https://build.nvidia.com) |
+| Cloudflare Workers AI | 10,000 req/day | [dash.cloudflare.com](https://dash.cloudflare.com) |
 
 No credit card required on any of these. All optional — one key is enough to start.
 
@@ -225,11 +230,18 @@ PROVIDER_ORDER=groq,gemini,ollama
 
 ## Smart routing
 
-The gateway applies signal-based routing rules automatically — no NLP, zero latency overhead:
+The gateway infers the task type from the request content and routes accordingly — no NLP model, zero latency overhead:
 
-- **Long context (>24k chars)** — Cerebras is skipped (hard cap at 8192 tokens)
-- **Vision requests** — routed to Gemini only (only multimodal provider)
-- **Explicit model hint** — routes to that provider exclusively, returns 503 if unavailable
+| Task | Detection | Providers tried |
+|---|---|---|
+| `vision` | `image_url` in message content | Gemini, OpenRouter |
+| `long_context` | message > 24k chars | Gemini only (1M ctx) |
+| `code` | ` ``` ` block or keywords (`def`, `bug`, `refactor`…) | Groq, Cerebras first |
+| `default` | everything else | quota-sorted order |
+
+- **Circuit breaker** — 3-state (CLOSED → OPEN → HALF_OPEN). Failing provider is skipped for 5 min then probed once.
+- **Explicit model hint** — routes to that provider exclusively, returns 503 if unavailable.
+- Task type is exposed in the `X-FreeAI-Task` response header.
 
 ---
 
@@ -246,6 +258,49 @@ The gateway applies signal-based routing rules automatically — no NLP, zero la
 - **OpenAI-compatible** — works with AnythingLLM, LibreChat, OpenCode, any OpenAI SDK
 - **Anthropic-compatible** — `POST /v1/messages` accepts Anthropic SDK requests natively
 - **Auto .env** — `backend/.env` created automatically on first Docker start
+
+---
+
+## Hermes Agent (NousResearch)
+
+FreeIA Gateway is fully compatible with [Hermes Agent](https://github.com/NousResearch/hermes-function-calling) and any OpenAI-compatible agent framework.
+
+Point your agent at `http://localhost:8002`:
+
+```python
+# LangChain / LlamaIndex / Hermes
+llm = ChatOpenAI(
+    base_url="http://localhost:8002/v1",
+    api_key="freeai",
+    model="auto",  # or any provider hint
+)
+```
+
+```yaml
+# AnythingLLM / LibreChat / Open WebUI
+LLM_BASE_URL: http://localhost:8002/v1
+LLM_API_KEY: freeai
+```
+
+The `/v1/chat/completions` endpoint is OpenAI-spec compliant — tool calls, streaming, and function definitions all work.
+
+---
+
+## Dashboard
+
+`GET http://localhost:8002/` — HTML dashboard with provider circuit status, daily quota usage, and today's request breakdown by task type. Auto-refreshes every 30 seconds.
+
+`GET http://localhost:8002/v1/quota` — same data as JSON.
+
+---
+
+## Telemetry (opt-out)
+
+FreeIA Gateway sends a minimal anonymous ping at startup (`version`, `os`, `providers_count`, `ollama`). To disable:
+
+```env
+FREEAI_TELEMETRY=0
+```
 
 ---
 

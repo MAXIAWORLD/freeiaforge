@@ -48,3 +48,4 @@ class ProviderStatus(BaseModel):
     last_error: str | None = None
     last_used_at: str | None = None
     consecutive_errors: int = 0
+    circuit_status: str = "CLOSED"

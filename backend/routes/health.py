@@ -2,16 +2,41 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from core.models import ProviderStatus
 from routes.chat import get_router
+from services.stats_history import get_last_7_days
 
 router = APIRouter()
 
 
 @router.get("/health")
-async def health() -> dict:
-    return {"status": "ok", "service": "freeai-gateway"}
+async def health(request: Request) -> dict:
+    try:
+        r = get_router()
+        providers_count = len(getattr(r, "_providers", []))
+    except RuntimeError:
+        providers_count = 0
+    return {
+        "status": "ok",
+        "service": "freeai-gateway",
+        "version": request.app.version,
+        "providers": providers_count,
+    }
+
+
+@router.get("/v1/quota")
+async def quota() -> dict:
+    r = get_router()
+    statuses = await r.get_provider_statuses()
+    daily_stats = r.get_daily_stats()
+    stats_db = getattr(r, "_stats_db", None)
+    history = await get_last_7_days(stats_db) if stats_db is not None else []
+    return {
+        "providers": [s.model_dump() for s in statuses],
+        "daily_stats": daily_stats,
+        "history": history,
+    }
 
 
 async def _providers_handler() -> list[ProviderStatus]:

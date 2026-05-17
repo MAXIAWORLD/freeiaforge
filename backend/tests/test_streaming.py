@@ -107,7 +107,7 @@ async def test_streaming_has_x_provider_header():
                 json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
             )
 
-    assert r.headers.get("x-provider") == "groq"
+    assert r.headers.get("x-freeai-provider") == "groq"
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_non_streaming_has_x_provider_header():
             )
 
     assert r.status_code == 200
-    assert r.headers.get("x-provider") == "groq"
+    assert r.headers.get("x-freeai-provider") == "groq"
 
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_non_streaming_x_provider_matches_actual_provider():
                 json={"messages": [{"role": "user", "content": "hi"}]},
             )
 
-    assert r.headers.get("x-provider") == "cerebras"
+    assert r.headers.get("x-freeai-provider") == "cerebras"
 
 
 # ---------------------------------------------------------------------------

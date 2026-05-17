@@ -11,6 +11,8 @@ TEST_LIMITS = {
     "huggingface": {"requests": 1000, "tokens": 500_000},
     "mistral": {"requests": 100, "tokens": 200_000},
     "openrouter": {"requests": 200, "tokens": 500_000},
+    "nvidia_nim": {"requests": 10_000, "tokens": 1_000_000},
+    "cloudflare": {"requests": 10_000, "tokens": 1_000_000},
     "ollama": {"requests": 10_000, "tokens": 10_000_000},
 }
 

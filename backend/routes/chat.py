@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from core.models import ChatRequest
 from services.router import ProviderRouter
+from services.task_inference import infer_task_type
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,6 +28,8 @@ async def chat_completions(request: ChatRequest, response: Response):
     if not request.messages:
         raise HTTPException(status_code=400, detail="messages cannot be empty")
 
+    task_type = infer_task_type(request)
+
     if request.stream:
         try:
             provider_name, gen = await get_router().route_stream(request)
@@ -38,7 +41,8 @@ async def chat_completions(request: ChatRequest, response: Response):
             gen,
             media_type="text/event-stream",
             headers={
-                "X-Provider": provider_name,
+                "X-FreeAI-Provider": provider_name,
+                "X-FreeAI-Task": task_type,
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
@@ -51,5 +55,6 @@ async def chat_completions(request: ChatRequest, response: Response):
             raise HTTPException(status_code=503, detail=str(e))
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    response.headers["X-Provider"] = result.provider_name
+    response.headers["X-FreeAI-Provider"] = result.provider_name
+    response.headers["X-FreeAI-Task"] = task_type
     return result.response

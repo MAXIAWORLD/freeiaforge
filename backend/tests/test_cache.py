@@ -14,7 +14,7 @@ from core.models import (
     Message,
 )
 from providers.base import ProviderResult
-from services.cache import SemanticCache
+from services.cache import ExactCache
 from services.router import ProviderRouter
 
 
@@ -55,14 +55,14 @@ def make_request(text: str = "hi") -> ChatRequest:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests — SemanticCache
+# Unit tests — ExactCache
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_cache_lookup_empty_returns_none(tmp_path: Path) -> None:
     """Lookup sur cache vide → None."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     result = await cache.lookup(make_messages("what is the capital of France?"))
     assert result is None
 
@@ -70,7 +70,7 @@ async def test_cache_lookup_empty_returns_none(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_store_then_lookup_returns_response(tmp_path: Path) -> None:
     """Store puis lookup avec les mêmes messages → retourne ChatResponse."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     messages = make_messages("what is 2+2?")
     response = make_response("4")
 
@@ -84,7 +84,7 @@ async def test_cache_store_then_lookup_returns_response(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_lookup_after_ttl_returns_none(tmp_path: Path) -> None:
     """Après TTL expiré → lookup retourne None."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     messages = make_messages("temp question")
     response = make_response("temp answer")
 
@@ -103,7 +103,7 @@ async def test_cache_lookup_after_ttl_returns_none(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_different_messages_no_hit(tmp_path: Path) -> None:
     """Messages différents → pas de hit."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     await cache.store(
         make_messages("question A"), make_response("answer A"), ttl_seconds=3600
     )
@@ -115,7 +115,7 @@ async def test_cache_different_messages_no_hit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_normalized_whitespace_hits(tmp_path: Path) -> None:
     """Whitespace normalisé → même hash."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     messages_stored = make_messages("  hello world  ")
     messages_lookup = make_messages("hello world")
 
@@ -130,7 +130,7 @@ async def test_cache_normalized_whitespace_hits(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_case_insensitive_hit(tmp_path: Path) -> None:
     """Case normalisé → même hash."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     await cache.store(
         make_messages("What Is 2+2?"), make_response("four"), ttl_seconds=3600
     )
@@ -143,7 +143,7 @@ async def test_cache_case_insensitive_hit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_overwrite_extends_ttl(tmp_path: Path) -> None:
     """Re-stocker la même clé → nouvelle réponse retournée."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     messages = make_messages("same question")
 
     await cache.store(messages, make_response("first"), ttl_seconds=3600)
@@ -157,7 +157,7 @@ async def test_cache_overwrite_extends_ttl(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_cache_multipart_messages(tmp_path: Path) -> None:
     """Liste de messages avec rôles multiples → hash stable."""
-    cache = SemanticCache(data_dir=tmp_path)
+    cache = ExactCache(data_dir=tmp_path)
     messages = [
         Message(role="system", content="You are helpful."),
         Message(role="user", content="hi"),

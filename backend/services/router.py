@@ -11,10 +11,19 @@ from core.models import ChatRequest, ProviderStatus
 from providers.base import Provider, ProviderResult, ProviderError
 from services.credential_pool import CredentialPool
 from services.quota import QuotaService
+from services.task_inference import (
+    infer_task_type,
+    TASK_LONG_CONTEXT,
+    TASK_VISION,
+    TASK_CODE,
+    has_vision,
+    total_chars,
+)
 
 if TYPE_CHECKING:
     import aiosqlite
-    from services.cache import SemanticCache
+    from services.cache import ExactCache, SemanticCache
+    from services.stats_history import record_request as _record_request_type
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +37,17 @@ _KNOWN_PROVIDERS = frozenset(
         "huggingface",
         "mistral",
         "openrouter",
+        "nvidia_nim",
+        "cloudflare",
         "ollama",
     }
 )
 
-# Seuil de caractères au-delà duquel Cerebras est skipé (≈8000 tokens × 3 chars/token)
+# Seuil de caractères au-delà duquel Cerebras est skipé (redondant avec task_inference, conservé en défense)
 _CEREBRAS_CHAR_LIMIT = 24_000
+
+_MULTIMODAL_PROVIDERS = frozenset({"gemini", "openrouter"})
+_CODE_PRIORITY_PROVIDERS = frozenset({"groq", "cerebras"})
 
 # TTL par défaut pour le cache (en secondes)
 _DEFAULT_CACHE_TTL = 3600
@@ -92,11 +106,16 @@ class ProviderRouter:
         providers: list[Provider],
         quota: QuotaService,
         api_keys: dict[str, str] | None = None,
-        cache: SemanticCache | None = None,
+        cache: "ExactCache | SemanticCache | None" = None,
         provider_order: list[str] | None = None,
         credential_pool: CredentialPool | None = None,
         db: "aiosqlite.Connection | None" = None,
+        cb_failure_threshold: int = 3,
+        cb_timeout_seconds: int = 600,
+        cb_half_open_after: int = 300,
+        stats_db: "aiosqlite.Connection | None" = None,
     ) -> None:
+        self._use_static_order = bool(provider_order)
         if provider_order:
             self._providers = self._apply_order(providers, provider_order)
         else:
@@ -104,13 +123,17 @@ class ProviderRouter:
         self._quota = quota
         self._api_keys = api_keys or {}
         self._cache = cache
-        # State d'erreur in-memory : {provider_name: {consecutive_errors, last_error, last_used_at}}
         self._error_state: dict[str, dict] = {}
         self._db = db
+        self._cb_failure_threshold = cb_failure_threshold
+        self._cb_timeout_seconds = cb_timeout_seconds
+        self._cb_half_open_after = cb_half_open_after
+        self._daily_stats: dict[str, int] = {}
+        self._daily_date: str = ""
+        self._total_today: int = 0
+        self._stats_db = stats_db
 
         # Build credential pool from api_keys if no explicit pool was provided.
-        # When an explicit pool is given, it overrides api_keys for key resolution
-        # but api_keys remains exposed for legacy /v1/models discovery.
         if credential_pool is None:
             credential_pool = CredentialPool()
             for name, key in self._api_keys.items():
@@ -123,24 +146,21 @@ class ProviderRouter:
         return await self._pool.next_key(provider_name) or ""
 
     async def restore_circuit_state(self) -> None:
-        """Load persisted circuit_state rows into in-memory _error_state.
-
-        Safe to call without a db (no-op). Should run once at boot, after
-        the router is constructed, so providers' historical error counts
-        survive restarts.
-        """
+        """Load persisted circuit_state rows into in-memory _error_state."""
         if self._db is None:
             return
         async with self._db.execute(
-            "SELECT provider, consecutive_errors, last_error, last_used_at "
-            "FROM circuit_state"
+            "SELECT provider, consecutive_errors, last_error, last_used_at, "
+            "circuit_status, open_since FROM circuit_state"
         ) as cursor:
             rows = await cursor.fetchall()
-        for provider, consecutive_errors, last_error, last_used_at in rows:
+        for provider, consecutive_errors, last_error, last_used_at, circuit_status, open_since in rows:
             self._error_state[provider] = {
                 "consecutive_errors": consecutive_errors,
                 "last_error": last_error,
                 "last_used_at": last_used_at,
+                "circuit_status": circuit_status or "CLOSED",
+                "open_since": open_since,
             }
 
     async def _persist_circuit_state(self, provider_name: str) -> None:
@@ -150,18 +170,23 @@ class ProviderRouter:
         await self._db.execute(
             """
             INSERT INTO circuit_state
-                (provider, consecutive_errors, last_error, last_used_at)
-            VALUES (?, ?, ?, ?)
+                (provider, consecutive_errors, last_error, last_used_at,
+                 circuit_status, open_since)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider) DO UPDATE SET
                 consecutive_errors = excluded.consecutive_errors,
                 last_error = excluded.last_error,
-                last_used_at = excluded.last_used_at
+                last_used_at = excluded.last_used_at,
+                circuit_status = excluded.circuit_status,
+                open_since = excluded.open_since
             """,
             (
                 provider_name,
                 state.get("consecutive_errors", 0),
                 state.get("last_error"),
                 state.get("last_used_at"),
+                state.get("circuit_status", "CLOSED"),
+                state.get("open_since"),
             ),
         )
         await self._db.commit()
@@ -210,60 +235,134 @@ class ProviderRouter:
     def _now_iso(self) -> str:
         return datetime.now(tz=timezone.utc).isoformat()
 
+    def get_daily_stats(self) -> dict:
+        today = datetime.now(tz=timezone.utc).date().isoformat()
+        if self._daily_date != today:
+            return {"total": 0, "by_task": {}}
+        return {"total": self._total_today, "by_task": dict(self._daily_stats)}
+
+    def _record_daily(self, task_type: str) -> None:
+        today = datetime.now(tz=timezone.utc).date().isoformat()
+        if self._daily_date != today:
+            self._daily_date = today
+            self._daily_stats = {}
+            self._total_today = 0
+        self._total_today += 1
+        self._daily_stats[task_type] = self._daily_stats.get(task_type, 0) + 1
+
+    # ------------------------------------------------------------------
+    # Circuit Breaker — machine à états
+    # ------------------------------------------------------------------
+
+    def _get_circuit_status(self, provider_name: str) -> str:
+        return self._error_state.get(provider_name, {}).get("circuit_status", "CLOSED")
+
+    def _is_circuit_available(self, provider_name: str) -> bool:
+        """True si le provider peut recevoir une requête (CLOSED ou probe HALF_OPEN)."""
+        status = self._get_circuit_status(provider_name)
+        if status == "CLOSED":
+            return True
+        if status == "HALF_OPEN":
+            return True
+        # OPEN — vérifier si le délai de récupération est écoulé
+        state = self._error_state.get(provider_name, {})
+        open_since_str = state.get("open_since")
+        if not open_since_str:
+            return False
+        try:
+            open_since = datetime.fromisoformat(open_since_str)
+            elapsed = (datetime.now(tz=timezone.utc) - open_since).total_seconds()
+            if elapsed >= self._cb_half_open_after:
+                state["circuit_status"] = "HALF_OPEN"
+                logger.info("[%s] Circuit OPEN → HALF_OPEN (probe autorisé)", provider_name)
+                return True
+        except (ValueError, TypeError):
+            pass
+        return False
+
     async def _on_success(self, provider_name: str) -> None:
         state = self._error_state.setdefault(provider_name, {})
+        was_recovering = state.get("circuit_status") in ("HALF_OPEN", "OPEN")
         state["consecutive_errors"] = 0
         state["last_used_at"] = self._now_iso()
         state.setdefault("last_error", None)
+        state["circuit_status"] = "CLOSED"
+        state["open_since"] = None
+        if was_recovering:
+            logger.info("[%s] Circuit → CLOSED (rétabli)", provider_name)
         await self._persist_circuit_state(provider_name)
 
     async def _on_error(self, provider_name: str, error: ProviderError) -> None:
+        # 400 = erreur requête user, 401 = clé invalide (géré par le pool)
+        if error.status_code in (400, 401):
+            return
         state = self._error_state.setdefault(provider_name, {})
         state["consecutive_errors"] = state.get("consecutive_errors", 0) + 1
         state["last_error"] = str(error)
         state.setdefault("last_used_at", None)
+        current_status = state.get("circuit_status", "CLOSED")
+        if current_status == "HALF_OPEN" or state["consecutive_errors"] >= self._cb_failure_threshold:
+            state["circuit_status"] = "OPEN"
+            state["open_since"] = self._now_iso()
+            logger.warning(
+                "[%s] Circuit → OPEN (errors=%d)", provider_name, state["consecutive_errors"]
+            )
         await self._persist_circuit_state(provider_name)
 
-    def _has_vision(self, request: ChatRequest) -> bool:
-        """Détecte si l'un des messages contient une image (content multimodal)."""
-        for msg in request.messages:
-            if isinstance(msg.content, list):
-                for part in msg.content:
-                    if isinstance(part, dict) and part.get("type") == "image_url":
-                        return True
-        return False
+    # ------------------------------------------------------------------
+    # Tri dynamique par quota restant
+    # ------------------------------------------------------------------
 
-    def _total_chars(self, request: ChatRequest) -> int:
-        total = 0
-        for msg in request.messages:
-            if isinstance(msg.content, str):
-                total += len(msg.content)
-            elif isinstance(msg.content, list):
-                for part in msg.content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        total += len(part.get("text", ""))
-        return total
+    async def _providers_by_quota(self) -> list[Provider]:
+        """Trie les providers par ratio quota restant décroissant.
+
+        Si un ordre explicite a été configuré (provider_order), l'ordre statique
+        est respecté sans re-tri. Tiebreak : priority (ascendant).
+        """
+        if self._use_static_order:
+            return list(self._providers)
+        ratios: dict[str, float] = {}
+        for p in self._providers:
+            try:
+                status = await self._quota.get_status(p.name)
+                lim = status.requests_limit
+                ratios[p.name] = (lim - status.requests_used) / lim if lim > 0 else 1.0
+            except Exception:
+                ratios[p.name] = 1.0
+        return sorted(
+            self._providers,
+            key=lambda p: (-ratios.get(p.name, 1.0), p.priority),
+        )
 
     def _should_skip(self, provider_name: str, request: ChatRequest) -> bool:
-        """
-        Règle 1 : Cerebras skipé si contexte > 24 000 chars.
-        Règle 2 : Vision → seul Gemini autorisé.
-        (La règle 3 model-hint est gérée séparément dans route().)
-        """
-        # Règle 2 — vision
-        if self._has_vision(request) and provider_name != "gemini":
-            logger.debug("Skipping %s: vision request requires Gemini", provider_name)
-            return True
+        """Règle de sécurité : Cerebras skipé si contexte > CEREBRAS_CHAR_LIMIT.
 
-        # Règle 1 — contexte long pour Cerebras
+        La vision et le long_context sont désormais gérés par _providers_for_task
+        avant l'entrée dans la boucle.
+        """
         if (
             provider_name == "cerebras"
-            and self._total_chars(request) > _CEREBRAS_CHAR_LIMIT
+            and total_chars(request) > _CEREBRAS_CHAR_LIMIT
         ):
             logger.debug("Skipping cerebras: context > %d chars", _CEREBRAS_CHAR_LIMIT)
             return True
-
         return False
+
+    def _providers_for_task(
+        self, task_type: str, providers: list[Provider]
+    ) -> list[Provider]:
+        """Filtre/réordonne les providers selon le type de tâche inféré."""
+        if task_type == TASK_LONG_CONTEXT:
+            gemini_only = [p for p in providers if p.name == "gemini"]
+            return gemini_only if gemini_only else providers
+        if task_type == TASK_VISION:
+            multimodal = [p for p in providers if p.name in _MULTIMODAL_PROVIDERS]
+            return multimodal if multimodal else providers
+        if task_type == TASK_CODE:
+            priority = [p for p in providers if p.name in _CODE_PRIORITY_PROVIDERS]
+            rest = [p for p in providers if p.name not in _CODE_PRIORITY_PROVIDERS]
+            return priority + rest
+        return providers
 
     # ------------------------------------------------------------------
     # Routing principal
@@ -284,14 +383,21 @@ class ProviderRouter:
         if hint in _KNOWN_PROVIDERS:
             return await self._route_hinted(request, hint)
 
-        # Routing normal avec règles de skip
-        for provider in self._providers:
+        # Inférer le type de tâche + filtrer/réordonner les providers
+        task_type = infer_task_type(request)
+        ordered = await self._providers_by_quota()
+        ordered = self._providers_for_task(task_type, ordered)
+
+        for provider in ordered:
             key = await self._key_for(provider.name)
             if not key:
                 logger.debug("Skipping %s: no API key available", provider.name)
                 continue
             if not await self._quota.is_available(provider.name):
                 logger.info("Skipping %s: quota exhausted", provider.name)
+                continue
+            if not self._is_circuit_available(provider.name):
+                logger.debug("Skipping %s: circuit %s", provider.name, self._get_circuit_status(provider.name))
                 continue
             if self._should_skip(provider.name, request):
                 continue
@@ -302,6 +408,10 @@ class ProviderRouter:
                 )
                 await self._on_success(provider.name)
                 await self._pool.mark_success(provider.name, key)
+                self._record_daily(task_type)
+                if self._stats_db is not None:
+                    from services.stats_history import record_request
+                    await record_request(self._stats_db, task_type, provider.name, result.tokens_used)
                 logger.info(
                     "Served by %s (%d tokens)", provider.name, result.tokens_used
                 )
@@ -378,11 +488,17 @@ class ProviderRouter:
             await self._pool.mark_success(hint, key)
             return hint, _safe_stream(hint, target.stream(request, key))
 
-        for provider in self._providers:
+        task_type = infer_task_type(request)
+        ordered = await self._providers_by_quota()
+        ordered = self._providers_for_task(task_type, ordered)
+
+        for provider in ordered:
             key = await self._key_for(provider.name)
             if not key:
                 continue
             if not await self._quota.is_available(provider.name):
+                continue
+            if not self._is_circuit_available(provider.name):
                 continue
             if self._should_skip(provider.name, request):
                 continue
@@ -415,6 +531,7 @@ class ProviderRouter:
                     last_error=state.get("last_error"),
                     last_used_at=state.get("last_used_at"),
                     consecutive_errors=state.get("consecutive_errors", 0),
+                    circuit_status=state.get("circuit_status", "CLOSED"),
                 )
             )
         return statuses
