@@ -10,7 +10,7 @@
 
 FreeIA Gateway aggregates 9 cloud LLM providers + local Ollama behind a single `/v1/chat/completions` endpoint. Automatic fallback, daily quota tracking, smart task-type routing, circuit breaker, semantic cache, and custom provider order.
 
-**Default priority chain:** Cerebras → Groq → Sambanova → Gemini → HuggingFace → Mistral → OpenRouter → NVIDIA NIM → Cloudflare → Ollama
+**Default priority chain:** Cerebras → Groq → Sambanova → Gemini → HuggingFace → NVIDIA NIM → Cloudflare → OpenRouter → Mistral → Ollama
 
 If a provider hits its daily limit or returns an error, the next one takes over silently.
 
@@ -107,7 +107,7 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434   # inside Docker
 OLLAMA_MODEL=llama3.2
 ```
 
-If Ollama isn't running, the gateway fails fast (ConnectError) and falls back gracefully. When Ollama is running, it acts as priority 9 — last resort after all cloud providers.
+If Ollama isn't running, the gateway fails fast (ConnectError) and falls back gracefully. When Ollama is running, it acts as priority 10 — last resort after all cloud providers.
 
 ---
 
@@ -154,13 +154,13 @@ client.messages.create(model="groq", ...)
 client.messages.create(model="ollama", ...)
 ```
 
-**Streaming** is supported: pass `stream=True` to receive SSE chunks.
+**Streaming** is not supported — use `stream=False` (omit or set explicitly).
 
 ---
 
 ## Connect via MCP (Claude Code, Cursor, Cline)
 
-FreeIA Gateway exposes a native MCP server — plug it directly into any MCP-compatible agent.
+FreeIA Gateway exposes an HTTP MCP-compatible endpoint — plug it directly into any MCP-compatible agent.
 
 **Claude Code** — add to `~/.claude/mcp_servers.json`:
 
@@ -247,14 +247,14 @@ The gateway infers the task type from the request content and routes accordingly
 
 ## Features
 
-- **Auto-fallback** — transparent failover across all 8 providers (7 cloud + Ollama)
+- **Auto-fallback** — transparent failover across all 10 providers (9 cloud + Ollama)
 - **Quota tracker** — SQLite, daily reset, never exceeds free limits
-- **Semantic cache** — SHA-256 on normalized messages, 1h TTL, saves quota on repeated requests
+- **Semantic cache** — cosine similarity (fastembed ≥0.3, threshold 0.90) + exact SHA-256 fallback, 1h TTL, saves quota on repeated requests
 - **Smart routing** — context length, vision detection, explicit model hints
 - **Custom order** — `PROVIDER_ORDER` env var to reorder providers
 - **Provider status** — `GET /v1/providers/status` → quota, last error, consecutive failures
-- **MCP server** — native MCP protocol, zero extra dependency
-- **MemPalace memory** — persistent memory across conversations (170 tokens overhead, 96.6% recall)
+- **MCP server** — HTTP MCP-compatible endpoint (GET /mcp + POST /mcp/tools/chat)
+
 - **OpenAI-compatible** — works with AnythingLLM, LibreChat, OpenCode, any OpenAI SDK
 - **Anthropic-compatible** — `POST /v1/messages` accepts Anthropic SDK requests natively
 - **Auto .env** — `backend/.env` created automatically on first Docker start
@@ -282,7 +282,7 @@ LLM_BASE_URL: http://localhost:8002/v1
 LLM_API_KEY: freeai
 ```
 
-The `/v1/chat/completions` endpoint is OpenAI-spec compliant — tool calls, streaming, and function definitions all work.
+The `/v1/chat/completions` endpoint is OpenAI-spec compliant — tool calls and function definitions work (`stream=False` only).
 
 ---
 
